@@ -114,14 +114,17 @@ jobs:
           df -h /
 
       - name: Add swap
+        # A runner may already have /swapfile active, so this adds its own file;
+        # the build still runs, only less safely, if swap cannot be added.
+        continue-on-error: true
         # The Rust release build of the services peaks above the runner's 16 GB
         # when several large crates compile at once, and the runner is then
         # shut down. Swap, plus CARGO_BUILD_JOBS=2 for that image, avoids it.
         run: |
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          sudo fallocate -l 8G /swapfile.macro
+          sudo chmod 600 /swapfile.macro
+          sudo mkswap /swapfile.macro
+          sudo swapon /swapfile.macro
           free -h
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
