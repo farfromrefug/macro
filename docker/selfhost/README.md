@@ -89,7 +89,9 @@ afterwards. Remove Mailpit's route from `Caddyfile` if the stack is public.
 ### FusionAuth admin
 
 The admin UI is bound to `127.0.0.1:9011` and is not part of the public origin.
-`setup.sh` prints the admin account it created.
+`setup.sh` prints the admin account it created. That account exists only for the
+admin UI; do not sign in to the Macro app with its address, because it is not
+registered for the app and the sign-in code cannot be verified.
 
 ## Building the images yourself
 
