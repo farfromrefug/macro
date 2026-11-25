@@ -1,0 +1,52 @@
+# syntax=docker/dockerfile:1
+#
+# The web app plus its reverse proxy for the self-host stack
+# (docker/selfhost/docker-compose.yml): Caddy serves the built app at /app and
+# routes every backend path (docker/selfhost/Caddyfile).
+#
+# The bundle is the one `just stack up` serves: a development-mode build with
+# production optimizations, whose backend origin is the `same-origin` sentinel
+# resolved from location.origin at runtime. One image therefore works on any
+# hostname (see static_build_command in
+# tooling/xtask/crates/xtask_local/src/local/frontend.rs, which this mirrors).
+#
+# Build from the repository root:
+#   docker build -f docker/Dockerfile.selfhost-web -t macro-web .
+FROM rust:1.94.0-bookworm AS builder
+
+# rust-toolchain.toml names components and cross targets the build never uses;
+# selecting the installed toolchain stops rustup from syncing them.
+ENV RUSTUP_TOOLCHAIN=1.94.0
+
+COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
+RUN rustup target add wasm32-unknown-unknown
+# wasm-pack builds the app's wasm packages (apps/web `just build-wasm`).
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
+    cargo install wasm-pack just --locked
+
+WORKDIR /app
+COPY . .
+
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install --frozen-lockfile
+
+# Nine wasm packages, built in parallel by the recipe.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
+    --mount=type=cache,target=/usr/local/cargo/git/db,sharing=shared \
+    --mount=type=cache,target=/app/target,id=macro-selfhost-web-wasm,sharing=locked \
+    just --justfile apps/web/justfile build-wasm
+
+WORKDIR /app/apps/web
+ENV MODE=development \
+    NODE_ENV=production \
+    NODE_OPTIONS=--max-old-space-size=8192 \
+    VITE_LOCAL_SERVERS=ALL \
+    VITE_LOCAL_BACKEND_ORIGIN=same-origin \
+    VITE_LOCAL_ONLY=true \
+    VITE_LOCAL_STACK=true \
+    VITE_AI_EDITING_WORKER_URL=/ai-editing
+RUN bun run --bun build
+
+FROM caddy:2-alpine
+COPY docker/selfhost/Caddyfile /etc/caddy/Caddyfile
+COPY --from=builder /app/apps/web/dist /srv/frontend

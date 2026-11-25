@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1
+#
+# One-shot bootstrap tools for the self-host stack
+# (docker/selfhost/docker-compose.yml): the database migrations, the OpenSearch
+# index setup and the FusionAuth kickstart renderer. All three are idempotent,
+# so the compose file runs them on every `up`.
+#
+# Build from the repository root:
+#   docker build -f docker/Dockerfile.selfhost-bootstrap -t macro-bootstrap .
+
+# sqlx-cli applies crates/macro_db_client/migrations, the same way
+# `just run_local` does through xtask. Pinned to the sqlx version in Cargo.lock.
+FROM rust:1.94.0-bookworm AS sqlx
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
+    cargo install sqlx-cli --version =0.8.6 --locked \
+      --no-default-features --features rustls,postgres \
+    && cp /usr/local/cargo/bin/sqlx /sqlx
+
+FROM oven/bun:1-debian
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates jq \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+COPY --from=sqlx /sqlx /usr/local/bin/sqlx
+COPY crates/macro_db_client/migrations /bootstrap/migrations
+
+# The canonical index mappings live in the TypeScript helpers; run them rather
+# than keep a second copy of the mapping bodies.
+WORKDIR /bootstrap/opensearch
+COPY infra/stacks/opensearch/helpers/package.json infra/stacks/opensearch/helpers/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY infra/stacks/opensearch/helpers/ ./
+
+# FusionAuth lambdas and the kickstart renderer.
+COPY infra/stacks/fusionauth-instance/templates/ /bootstrap/fusionauth/
+
+COPY docker/selfhost/bootstrap/ /usr/local/bin/
+RUN chmod +x /usr/local/bin/macro-*
+
+WORKDIR /bootstrap
+CMD ["macro-migrate"]

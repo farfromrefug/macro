@@ -1,0 +1,9 @@
+#!/bin/sh
+# Create the Macro database if needed and apply every migration. Idempotent:
+# sqlx records applied migrations and skips them.
+set -eu
+
+: "${DATABASE_URL:?DATABASE_URL is required}"
+
+sqlx database create
+sqlx migrate run --source /bootstrap/migrations

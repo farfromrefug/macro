@@ -1,0 +1,183 @@
+#!/bin/sh
+# Render the FusionAuth kickstart file the identity provider applies on its
+# first boot against an empty database: signing key, tenant (with SMTP and the
+# passwordless template), the Macro application, an admin user and the webhooks
+# the authentication service listens on.
+#
+# Mirrors tooling/xtask/crates/xtask_local/src/local/kickstart.rs, which
+# generates the same document for `just run_local`, minus the GitHub and
+# Microsoft identity providers and the stack's emulators. Sign-in is by emailed
+# code. The Google providers are always created, because the agent harness
+# refuses to start without the `google_gmail` one; until GOOGLE_CLIENT_ID and
+# GOOGLE_CLIENT_SECRET name a real OAuth client, "Continue with Google" fails at
+# Google. Keep the two in sync when the local kickstart changes. The identifiers below are shared with
+# that code and with the services' own configuration (FUSIONAUTH_CLIENT_ID is
+# the application id, AUDIENCE the same), so they are fixed rather than random.
+#
+# FusionAuth only runs a kickstart against an empty database: changing these
+# values later has no effect on an existing one.
+set -eu
+
+: "${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required, e.g. https://localhost:8090}"
+: "${AUTH_PUBLIC_URL:?AUTH_PUBLIC_URL is required, e.g. http://localhost:8080}"
+: "${FUSIONAUTH_API_KEY:?FUSIONAUTH_API_KEY is required}"
+: "${FUSIONAUTH_CLIENT_SECRET:?FUSIONAUTH_CLIENT_SECRET is required}"
+: "${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}"
+: "${INTERNAL_API_SECRET_KEY:?INTERNAL_API_SECRET_KEY is required}"
+: "${ADMIN_EMAIL:?ADMIN_EMAIL is required}"
+: "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
+
+OUT="${1:-/kickstart/kickstart.json}"
+TEMPLATES="${MACRO_FUSIONAUTH_TEMPLATES:-/bootstrap/fusionauth}"
+
+mkdir -p "$(dirname "$OUT")"
+
+jq -n \
+  --arg publicOrigin "$PUBLIC_ORIGIN" \
+  --arg authPublicUrl "$AUTH_PUBLIC_URL" \
+  --arg apiKey "$FUSIONAUTH_API_KEY" \
+  --arg clientSecret "$FUSIONAUTH_CLIENT_SECRET" \
+  --arg jwtSecret "$JWT_SECRET_KEY" \
+  --arg internalKey "$INTERNAL_API_SECRET_KEY" \
+  --arg adminEmail "$ADMIN_EMAIL" \
+  --arg adminPassword "$ADMIN_PASSWORD" \
+  --arg smtpHost "${SMTP_HOST:-mailpit}" \
+  --argjson smtpPort "${SMTP_PORT:-1025}" \
+  --arg smtpSecurity "${SMTP_SECURITY:-NONE}" \
+  --arg smtpUsername "${SMTP_USERNAME:-}" \
+  --arg smtpPassword "${SMTP_PASSWORD:-}" \
+  --arg mailFrom "${MAIL_FROM:-noreply@macro.local}" \
+  --arg googleClientId "${GOOGLE_CLIENT_ID:-local-google-client}" \
+  --arg googleClientSecret "${GOOGLE_CLIENT_SECRET:-local-google-client-secret}" \
+  --rawfile populateJwt "$TEMPLATES/populate_jwt_local.js" \
+  --rawfile reconcileJwt "$TEMPLATES/reconcile_secondary_idp_link.js" \
+  '
+  "22222222-2222-4222-8222-222222222222" as $app
+  | "11111111-1111-4111-8111-111111111111" as $tenant
+  | "d7d09513-a3f5-401c-9685-34ab6c552453" as $key
+  | "a7f3e8d2-4b91-4c5a-9e6f-1a2b3c4d5e6f" as $lambda
+  | "33333333-3333-4333-8333-333333333333" as $template
+  | "66666666-6666-4666-8666-666666666666" as $reconcile
+  | "44444444-4444-4444-8444-444444444444" as $googleIdp
+  | "55555555-5555-4555-8555-555555555555" as $gmailIdp
+  | (def oauth2($scope): {
+        authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth?prompt=consent&access_type=offline",
+        token_endpoint: "https://oauth2.googleapis.com/token",
+        userinfo_endpoint: "https://openidconnect.googleapis.com/v1/userinfo",
+        client_id: $googleClientId, client_secret: $googleClientSecret,
+        clientAuthenticationMethod: "client_secret_basic", scope: $scope,
+        uniqueIdClaim: "sub", emailClaim: "email",
+        emailVerifiedClaim: "email_verified", usernameClaim: "preferred_username" };
+     { "\($app)": { enabled: true, createRegistration: true } } as $appConfig
+     | [
+        { method: "POST", url: "/api/lambda/\($reconcile)",
+          body: { lambda: { id: $reconcile, name: "Reconcile Secondary IdP Link",
+                            type: "OpenIDReconcile", enabled: true, body: $reconcileJwt } } },
+        { method: "POST", url: "/api/identity-provider/\($googleIdp)",
+          body: { identityProvider: {
+            type: "OpenIDConnect", name: "google", enabled: true, debug: true,
+            buttonText: "Google", linkingStrategy: "LinkByEmail",
+            oauth2: oauth2("openid profile email"),
+            applicationConfiguration: $appConfig } } },
+        { method: "POST", url: "/api/identity-provider/\($gmailIdp)",
+          body: { identityProvider: {
+            type: "OpenIDConnect", name: "google_gmail", enabled: true, debug: true,
+            buttonText: "GoogleGmail", linkingStrategy: "LinkByEmail",
+            lambdaConfiguration: { reconcileId: $reconcile },
+            oauth2: oauth2("openid profile email https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/contacts.other.readonly https://www.googleapis.com/auth/gmail.settings.basic https://www.googleapis.com/auth/calendar"),
+            applicationConfiguration: $appConfig } } }
+       ]) as $googleRequests
+  | {
+      apiKeys: [{ key: $apiKey, description: "Macro self-host API key" }],
+      # Renames FusionAuth built-in default tenant to our fixed id at
+      # schema-creation time, so the tenant request below adopts it instead of
+      # creating a second tenant.
+      variables: { defaultTenantId: $tenant },
+      requests: [
+        { method: "POST", url: "/api/key/import/\($key)",
+          body: { key: { id: $key, algorithm: "HS256", name: "Macro JWT signing key",
+                         secret: $jwtSecret, type: "HMAC" } } },
+        { method: "POST", url: "/api/lambda/\($lambda)",
+          body: { lambda: { id: $lambda, name: "Populate JWT", type: "JWTPopulate",
+                            enabled: true, body: $populateJwt } } },
+        # ${code} is FreeMarker, evaluated by FusionAuth when it sends the mail.
+        { method: "POST", url: "/api/email/template/\($template)",
+          body: { emailTemplate: {
+            name: "Passwordless login",
+            defaultSubject: "Your Macro login code",
+            defaultHtmlTemplate: "<p>Your Macro login code:</p><h1>${code}</h1>",
+            defaultTextTemplate: "Your Macro login code: ${code}",
+            fromEmail: $mailFrom } } },
+        { method: "PATCH", url: "/api/tenant/\($tenant)",
+          body: { tenant: {
+            name: "Macro",
+            issuer: "local.macro.com",
+            eventConfiguration: { events: {
+              "user.create": { enabled: true, transactionType: "AbsoluteMajority" },
+              "user.create.complete": { enabled: true, transactionType: "None" },
+              "user.delete.complete": { enabled: true, transactionType: "None" },
+              "user.email.verified": { enabled: true, transactionType: "AbsoluteMajority" } } },
+            jwtConfiguration: { accessTokenKeyId: $key, idTokenKeyId: $key,
+                                refreshTokenTimeToLiveInMinutes: 43200,
+                                timeToLiveInSeconds: 3600 },
+            emailConfiguration: ({
+              host: $smtpHost, port: $smtpPort, security: $smtpSecurity,
+              defaultFromEmail: $mailFrom, defaultFromName: "Macro",
+              passwordlessEmailTemplateId: $template }
+              + (if $smtpUsername != "" then { username: $smtpUsername, password: $smtpPassword } else {} end)),
+            externalIdentifierConfiguration: {
+              passwordlessLoginGenerator: { length: 6, type: "randomDigits" } } } } },
+        { method: "POST", url: "/api/application/\($app)", tenantId: $tenant,
+          body: { application: {
+            name: "Macro", tenantId: $tenant,
+            loginConfiguration: { allowTokenRefresh: true, requireAuthentication: true,
+                                  generateRefreshTokens: true },
+            oauthConfiguration: {
+              clientId: $app, clientSecret: $clientSecret,
+              enabledGrants: ["authorization_code", "refresh_token"],
+              authorizedRedirectURLs: [
+                "\($publicOrigin)/app",
+                "\($authPublicUrl)/oauth/redirect",
+                "http://authentication-service:8080/oauth/redirect",
+                "\($publicOrigin)/cognition/mcp/servers/auth/callback",
+                "\($publicOrigin)/mcp/oauth/callback" ],
+              authorizedURLValidationPolicy: "AllowWildcards",
+              logoutBehavior: "AllApplications",
+              generateRefreshTokens: true,
+              requireClientAuthentication: false },
+            jwtConfiguration: { enabled: true, accessTokenKeyId: $key, idTokenKeyId: $key,
+                                timeToLiveInSeconds: 3600,
+                                refreshTokenTimeToLiveInMinutes: 43200,
+                                refreshTokenExpirationPolicy: "SlidingWindow" },
+            lambdaConfiguration: { accessTokenPopulateId: $lambda },
+            passwordlessConfiguration: { enabled: true } } } },
+        # Operator account for the FusionAuth admin UI. The registration
+        # application id is FusionAuth reserved id for that UI.
+        { method: "POST", url: "/api/user/registration",
+          body: { user: { email: $adminEmail, password: $adminPassword },
+                  registration: { applicationId: "3c219e58-ed0e-4b18-ad48-f4f92793ae32",
+                                  roles: ["admin"] } } },
+        # Registered after the admin user on purpose: the tenant marks
+        # user.create as AbsoluteMajority, so once this global webhook exists
+        # creating a user rolls back unless the authentication service answers
+        # 2xx, which it is not guaranteed to do while this kickstart runs.
+        { method: "POST", url: "/api/webhook",
+          body: { webhook: {
+            description: "Create User Webhook", connectTimeout: 1000, readTimeout: 2000,
+            url: "http://authentication-service:8080/webhooks/user", global: true,
+            eventsEnabled: { "user.create": true, "user.create.complete": true,
+                             "user.email.verified": true },
+            headers: { "x-internal-auth-key": $internalKey } } } },
+        { method: "POST", url: "/api/webhook",
+          body: { webhook: {
+            description: "Delete User Webhook", connectTimeout: 1000, readTimeout: 2000,
+            url: "http://authentication-service:8080/webhooks/user/delete", global: true,
+            eventsEnabled: { "user.delete.complete": true },
+            headers: { "x-internal-auth-key": $internalKey } } } }
+      ]
+    }
+  # The identity providers reference the application, so they come last.
+  | .requests += $googleRequests
+  ' > "$OUT"
+
+echo "wrote $OUT"

@@ -1,0 +1,135 @@
+# Reverse proxy for the self-host stack: one origin for the web app and every
+# backend route, as the local stack's proxy does (see
+# tooling/xtask/crates/xtask_local/src/local/proxy.rs, which generates the
+# equivalent routes from the service inventory).
+#
+# SITE_ADDRESS is what Caddy listens for: `localhost:8090` for a trial run, or a
+# public hostname (Caddy then gets a certificate itself).
+# TLS_MODE is `internal` (Caddy's own CA, for localhost and private hosts) or an
+# email address for ACME on a public hostname.
+{
+	auto_https disable_redirects
+	admin off
+}
+
+{$SITE_ADDRESS:localhost:8090} {
+	tls {$TLS_MODE:internal}
+
+	# --- Backend services (HTTP; each listens on :8080) ----------------------
+	handle_path /auth/* {
+		reverse_proxy authentication-service:8080
+	}
+	handle_path /contacts/* {
+		reverse_proxy contacts-service:8080
+	}
+	handle_path /dss/* {
+		reverse_proxy document-storage-service:8080
+	}
+	handle_path /email/* {
+		reverse_proxy email-service:8080
+	}
+	handle_path /calendar/* {
+		reverse_proxy calendar-service:8080
+	}
+	handle_path /notification/* {
+		reverse_proxy notification-service:8080
+	}
+	handle_path /unfurl/* {
+		reverse_proxy unfurl-service:8080
+	}
+	handle_path /image-proxy/* {
+		reverse_proxy image-proxy-service:8080
+	}
+
+	# WebSocket: the app connects to the bare prefix, which handle_path
+	# /connection-gateway/* would miss.
+	@connection_gateway path /connection-gateway /connection-gateway/*
+	handle @connection_gateway {
+		uri strip_prefix /connection-gateway
+		reverse_proxy connection-gateway:8080
+	}
+
+	# The agent harness: the assistant, agent sessions, connectors, scheduled
+	# actions and the MCP endpoint. The app calls these on every page load.
+	handle_path /agent-harness/* {
+		reverse_proxy agent-harness-service:8080
+	}
+	@harness path /preview /preview/* /scheduled-action /scheduled-action/* /cognition /cognition/* /mcp /mcp/*
+	handle @harness {
+		reverse_proxy agent-harness-service:8080
+	}
+
+	# --- Workers ---------------------------------------------------------------
+	@sync path /sync /sync/*
+	handle @sync {
+		uri strip_prefix /sync
+		reverse_proxy sync-service:8787 {
+			# The sync worker rejects origins outside its allowlist before it
+			# upgrades a socket, and CORS for this stack is the proxy's job.
+			header_up Origin http://localhost:3000
+		}
+	}
+	@websocket path /websocket /websocket/*
+	handle @websocket {
+		uri strip_prefix /websocket
+		reverse_proxy websocket-service:6969
+	}
+	handle_path /lexical/* {
+		reverse_proxy lexical-service:8096
+	}
+
+	# Telemetry the app sends through the analytics proxy, which this stack
+	# does not run.
+	handle /i/* {
+		respond 204
+	}
+
+	# --- Object storage ----------------------------------------------------------
+	# Presigned upload and download URLs point at this origin, so a browser
+	# never needs a direct connection to LocalStack.
+	handle_path /local-storage/* {
+		# A link signed for the CDN (received email attachments): there is no
+		# CDN here, and LocalStack reads its `Signature` and `Expires` as an S3
+		# query signature it then refuses.
+		@cdn_signed query Key-Pair-Id=*
+		uri @cdn_signed query {
+			-Signature
+			-Expires
+			-Key-Pair-Id
+		}
+		reverse_proxy localstack:4566
+	}
+	handle_path /static-file/* {
+		# Keep service dispatch ahead of the S3 rewrite inside this handle.
+		route {
+			@svc path /api/* /internal/*
+			reverse_proxy @svc static-file-service:8080
+			rewrite * /static-file-storage{uri}
+			reverse_proxy localstack:4566
+		}
+	}
+
+	# Mailpit (the default SMTP sink) serves itself under /mailpit, so no
+	# prefix strip. This is where sign-in codes arrive until SMTP is configured.
+	handle /mailpit/* {
+		reverse_proxy mailpit:8025
+	}
+	redir /mailpit /mailpit/ 308
+
+	# --- Web app -----------------------------------------------------------------
+	# Built with base `/app`: URLs under /app map onto the bundle root after the
+	# prefix strip, and unknown paths fall back to index.html (SPA routing).
+	redir / "/app/?{query}" 302
+	redir /app /app/ 308
+	handle_path /app/* {
+		root * /srv/frontend
+		try_files {path} /index.html
+		file_server
+	}
+
+	# Anything else is not a route of this stack. Without this Caddy answers an
+	# unmatched path with an empty 200, which the app then fails to parse.
+	handle {
+		respond "not found" 404
+	}
+}

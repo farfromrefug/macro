@@ -1,0 +1,791 @@
+# Macro, self-hosted: the web app, the core backend services and their
+# infrastructure, started from published images.
+#
+#   cd docker/selfhost
+#   ./setup.sh              # creates .env with generated secrets
+#   docker compose up -d
+#
+# Then open PUBLIC_ORIGIN (https://localhost:8090 by default). Sign in with any
+# email address: the one-time code arrives in Mailpit, at PUBLIC_ORIGIN/mailpit,
+# until SMTP_HOST points at a real mail server. See README.md.
+#
+# This is the same service set `just run_local` runs (docker/docker-compose.yml
+# plus the xtask-generated override), minus the WhatsApp and Slack workers, the
+# AI editing worker and the Gmail/Outlook/model emulators. AWS is stood in for by
+# LocalStack, as it is locally: the services have no other storage or queue
+# backend.
+name: macro-selfhost
+
+# Configuration shared by every Rust service. Static values mirror
+# tooling/xtask/crates/xtask_local/src/local/local_env.rs (the local stack's
+# env); anything secret or specific to this deployment comes from .env.
+x-macro-env: &macro-env
+  ENVIRONMENT: local
+  PORT: "8080"
+  RUST_MIN_STACK: "67108864"
+
+  # Where the browser reaches this stack.
+  APP_BASE_URL: ${PUBLIC_ORIGIN}
+  FRONTEND_ORIGIN: ${PUBLIC_ORIGIN}
+  PIPEDREAM_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN}
+  OVERRIDE_APP_SERVICE_URL: ${PUBLIC_ORIGIN}
+  OVERRIDE_API_GATEWAY_URL: ${PUBLIC_ORIGIN}
+  OVERRIDE_COGNITION_PUBLIC_URL: ${PUBLIC_ORIGIN}/cognition
+  OVERRIDE_MCP_PUBLIC_URL: ${PUBLIC_ORIGIN}/mcp
+  OVERRIDE_STATIC_FILE_PUBLIC_URL: ${PUBLIC_ORIGIN}/static-file
+  LOCAL_AWS_PUBLIC_URL: ${PUBLIC_ORIGIN}/local-storage
+  DOCUMENT_STORAGE_SERVICE_CLOUDFRONT_DISTRIBUTION_URL: ${PUBLIC_ORIGIN}/local-storage/doc-storage
+  EMAIL_SERVICE_CLOUDFRONT_DISTRIBUTION_URL: ${PUBLIC_ORIGIN}/local-storage/macro-email-attachments
+  BASE_URL: ${PUBLIC_ORIGIN}/auth
+  GITHUB_SYNC_APP_URL: ${PUBLIC_ORIGIN}
+
+  # Infrastructure.
+  DATABASE_URL: &database-url postgres://${POSTGRES_USER:-macro}:${POSTGRES_PASSWORD}@postgres:5432/macrodb
+  DATABASE_URL_READONLY: *database-url
+  MACRO_DB_URL: *database-url
+  REDIS_URI: redis://redis:6379
+  REDIS_HOST: redis://redis:6379
+  DOCUMENT_STORAGE_SERVICE_REDIS_URI: redis://redis:6379
+  LAST_ONLINE_REDIS_URI: redis://redis:6379
+  OPENSEARCH_URL: http://search:9200
+  OPENSEARCH_USERNAME: macrouser
+  OPENSEARCH_PASSWORD: local
+  KAFKA_BROKERS: kafka:29092
+  LOCAL_AWS_URL: http://localstack:4566
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  AWS_REGION: us-east-1
+  AWS_DEFAULT_REGION: us-east-1
+  SMTP_HOST: ${SMTP_HOST:-mailpit}
+  SMTP_PORT: ${SMTP_PORT:-1025}
+  SENDER_BASE_ADDRESS: ${MAIL_FROM_DOMAIN:-macro.local}
+
+  # Service-to-service addresses.
+  OVERRIDE_AUTH_SERVICE_URL: http://authentication-service:8080
+  OVERRIDE_CALENDAR_SERVICE_URL: http://calendar-service:8080
+  OVERRIDE_CONNECTION_GATEWAY_URL: http://connection-gateway:8080
+  OVERRIDE_CONNECTION_GATEWAY_WEBSOCKET_URL: ws://connection-gateway:8080
+  OVERRIDE_CONTACTS_SERVICE_URL: http://contacts-service:8080
+  OVERRIDE_DOCUMENT_STORAGE_SERVICE_URL: http://document-storage-service:8080
+  OVERRIDE_EMAIL_SERVICE_URL: http://email-service:8080
+  OVERRIDE_LEXICAL_SERVICE_URL: http://lexical-service:8096
+  OVERRIDE_NOTIFICATION_SERVICE_URL: http://notification-service:8080
+  OVERRIDE_SEARCH_PROCESSING_SERVICE_URL: http://search-processing-service:8080
+  OVERRIDE_STATIC_FILE_SERVICE_URL: http://static-file-service:8080
+  OVERRIDE_SYNC_SERVICE_URL: http://sync-service:8787
+  OVERRIDE_UNFURL_SERVICE_URL: http://unfurl-service:8080
+  # The agent harness, and the AI editing worker, which this stack does not run
+  # (a feature that calls it fails instead of reaching a service).
+  OVERRIDE_AGENT_GIT_SERVICE_URL: http://agent-harness-service:8080/agent-git
+  OVERRIDE_AGENT_HARNESS_SERVICE_URL: http://agent-harness-service:8080
+  OVERRIDE_AGENT_HARNESS_EGRESS_URL: http://agent-harness-service:8102
+  OVERRIDE_AI_EDITING_WORKER_URL: http://ai-editing-worker:8933
+  OVERRIDE_DOCUMENT_COGNITION_SERVICE_URL: http://agent-harness-service:8080/cognition
+  OVERRIDE_MCP_SERVICE_URL: http://agent-harness-service:8080
+  OVERRIDE_PREVIEW_GATEWAY_URL: http://agent-harness-service:8080/preview
+  OVERRIDE_SCHEDULED_ACTION_SERVICE_URL: http://agent-harness-service:8080/scheduled-action
+  EXTERNAL_EGRESS_BASE_URL: http://agent-harness-service:8102
+
+  # Shared secrets (generated into .env by setup.sh).
+  INTERNAL_API_SECRET_KEY: ${INTERNAL_API_SECRET_KEY}
+  INTERNAL_API_KEY: ${INTERNAL_API_SECRET_KEY}
+  INTERNAL_AUTH_KEY: ${INTERNAL_API_SECRET_KEY}
+  AUTHENTICATION_SERVICE_SECRET_KEY: ${INTERNAL_API_SECRET_KEY}
+  SYNC_SERVICE_AUTH_KEY: ${INTERNAL_API_SECRET_KEY}
+  SERVICE_INTERNAL_AUTH_KEY: ${INTERNAL_API_SECRET_KEY}
+  DOCUMENT_STORAGE_SERVICE_AUTH_KEY: ${INTERNAL_API_SECRET_KEY}
+  DOCUMENT_PERMISSION_JWT: ${DOCUMENT_PERMISSION_SECRET}
+  INTERNAL_CALL_SECRET: ${INTERNAL_CALL_SECRET}
+  URL_SIGNING_HMAC: ${URL_SIGNING_HMAC}
+
+  # Identity (FusionAuth). The ids are fixed: they are baked into the kickstart
+  # (bootstrap/macro-render-kickstart) that creates the application.
+  FUSIONAUTH_BASE_URL: http://fusionauth:9011
+  FUSIONAUTH_PUBLIC_URL: http://localhost:${FUSIONAUTH_PORT:-9011}
+  FUSIONAUTH_API_KEY: ${FUSIONAUTH_API_KEY}
+  FUSIONAUTH_API_KEY_SECRET_KEY: ${FUSIONAUTH_API_KEY}
+  FUSIONAUTH_CLIENT_ID: 22222222-2222-4222-8222-222222222222
+  FUSIONAUTH_CLIENT_SECRET_KEY: ${FUSIONAUTH_CLIENT_SECRET}
+  FUSIONAUTH_OAUTH_REDIRECT_URI: ${PUBLIC_ORIGIN}/auth/oauth/redirect
+  AUDIENCE: 22222222-2222-4222-8222-222222222222
+  ISSUER: local.macro.com
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+  MACRO_API_TOKEN_ISSUER: local
+  MACRO_API_TOKEN_EXPIRY_SECONDS: "3600"
+  MACRO_API_TOKEN_PUBLIC_KEY: ${MACRO_API_TOKEN_PUBLIC_KEY}
+  MACRO_API_TOKEN_PRIVATE_SECRET_KEY: ${MACRO_API_TOKEN_PRIVATE_KEY}
+  EMAIL_SERVICE_CLOUDFRONT_SIGNER_PRIVATE_KEY: ${ATTACHMENT_LINK_SIGNING_KEY}
+  EMAIL_SERVICE_CLOUDFRONT_SIGNER_PUBLIC_KEY_ID: macro-selfhost-signer
+  DOCUMENT_STORAGE_SERVICE_CLOUDFRONT_SIGNER_PUBLIC_KEY_ID: macro-selfhost-signer
+  DOCUMENT_STORAGE_SERVICE_CLOUDFRONT_SIGNER_PRIVATE_KEY: local
+  DOCUMENT_STORAGE_SERVICE_CLOUDFRONT_SIGNER_PRIVATE_KEY_SECRET_NAME: local-cloudfront-signer-private-key
+  ACCOUNT_LINK_STATE_SECRET: ${APP_SECRET}
+  GITHUB_INSTALLATION_STATE_SECRET: ${APP_SECRET}
+  GITHUB_WEBHOOK_SECRET_KEY: ${WEBHOOK_SECRET}
+  CAL_WEBHOOK_SECRET_KEY: ${WEBHOOK_SECRET}
+  STRIPE_WEBHOOK_SECRET_KEY: ${WEBHOOK_SECRET}
+  PIPEDREAM_WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+  PIPEDREAM_WEBHOOK_URI: http://agent-harness-service:8080/pipedream/mcp/webhook?secret=${WEBHOOK_SECRET}
+  MCP_CREDENTIALS_KEY_SECRET_NAME: ${MCP_CREDENTIALS_KEY}
+
+  # AWS resources (created by localstack/provision.sh).
+  ATTACHMENT_BUCKET: macro-email-attachments
+  DOCUMENT_STORAGE_BUCKET: doc-storage
+  DOCX_DOCUMENT_UPLOAD_BUCKET: docx-upload
+  STATIC_STORAGE_BUCKET: static-file-storage
+  UPLOAD_STAGING_BUCKET: bulk-upload-staging
+  CALL_RECORDING_BUCKET_NAME: macro-call-recording-local
+  AGENT_SESSION_CHANGES_BUCKET: agent-session-changes
+  GITHUB_PULL_REQUEST_PATCH_BUCKET: github-pull-request-patches
+  BULK_UPLOAD_REQUESTS_TABLE: bulk-upload
+  CONNECTION_GATEWAY_TABLE: connection-gateway-table
+  STATIC_FILE_SERVICE_DYNAMODB_TABLE_NAME: static-file-metadata
+  BACKFILL_JOBS_TABLE: search-processing-backfill-jobs
+  NOTIFICATION_QUEUE: http://localstack:4566/000000000000/notification-queue
+  NOTIFICATION_INGRESS_QUEUE: http://localstack:4566/000000000000/notification-ingress-queue
+  PUSH_NOTIFICATION_EVENT_HANDLER_QUEUE: push-delivery-queue
+  OVERRIDE_WEBHOOK_EVENT_QUEUE: http://localstack:4566/000000000000/webhook-event-queue.fifo
+  BACKFILL_QUEUE: email-service-backfill-queue
+  EMAIL_BACKFILL_QUEUE: http://localstack:4566/000000000000/email-service-backfill-queue
+  OVERRIDE_EMAIL_CRM_CLEANUP_QUEUE: http://localstack:4566/000000000000/email-service-crm-cleanup-queue
+  OVERRIDE_EMAIL_CRM_POPULATION_QUEUE: http://localstack:4566/000000000000/email-service-crm-population-queue.fifo
+  CHAT_DELETE_QUEUE: delete-chat-handler-queue
+  CONTACTS_QUEUE: contacts-queue
+  CONVERT_QUEUE: convert-service-queue
+  DOCUMENT_DELETE_QUEUE: delete-document-handler-queue
+  DOCUMENT_UPLOAD_FINALIZER_QUEUE_URL: http://localstack:4566/000000000000/document-upload-finalizer-queue
+  DOCUMENT_TEXT_EXTRACTOR_QUEUE: document-text-extractor-lambda-queue
+  EMAIL_SCHEDULED_QUEUE: email-service-scheduled-queue
+  GMAIL_INBOX_SYNC_QUEUE: email-service-gmail-inbox-sync-queue
+  GMAIL_INBOX_SYNC_RETRY_QUEUE: email-service-gmail-inbox-retry-queue
+  GMAIL_OPS_QUEUE: email-service-gmail-ops-queue
+  GMAIL_OPS_RETRY_QUEUE: email-service-gmail-ops-retry-queue
+  LINK_MANAGER_QUEUE: email-service-refresh-queue
+  OVERRIDE_LINK_MAINTENANCE_QUEUE: http://localstack:4566/000000000000/email-service-link-maintenance-queue
+  SEARCH_EVENT_QUEUE: search-event-queue
+  SFS_DELETE_QUEUE: email-sfs-delete-queue
+  SFS_UPLOADER_QUEUE: email-service-sfs-mapper-queue
+  STATIC_FILE_SERVICE_S3_EVENT_QUEUE_URL: http://localstack:4566/000000000000/static-file-s3-event-notification-queue
+  OVERRIDE_REMINDER_DISPATCH_QUEUE: http://localstack:4566/000000000000/reminder-dispatch-queue
+  OVERRIDE_CALENDAR_REMINDER_DISPATCH_QUEUE: http://localstack:4566/000000000000/calendar-reminder-dispatch-queue
+  OVERRIDE_CALENDAR_SERVICE_BACKFILL_QUEUE: http://localstack:4566/000000000000/calendar-service-backfill-queue
+  OVERRIDE_SLACK_IMPORT_QUEUE: http://localstack:4566/000000000000/slack-import-queue
+  OVERRIDE_SLACK_IMPORT_DLQ: http://localstack:4566/000000000000/slack-import-dlq
+  ENABLE_EMAIL_SCHEDULED_QUEUE: "true"
+  ENABLE_GMAIL_OPS_QUEUE: "true"
+  CURSOR_API_KEY_KMS_KEY_ID: alias/macro-local-cursor-api-key
+  CODEX_OAUTH_KMS_KEY_ID: alias/macro-local-codex-oauth
+  MCP_OAUTH_KMS_KEY_ID: alias/macro-local-mcp-oauth
+
+  # Feature switches. Calendar and Gmail batching ship dark in deployed
+  # environments; a stack that runs producers and workers from one build keeps
+  # them on, as the local stack does.
+  CALENDAR_SYNC_ENABLED: "true"
+  CALENDAR_SCOPE_ENABLED: "true"
+  CALENDAR_SEARCH_ENABLED: "true"
+  GMAIL_LABEL_WRITE_BATCHES_ENABLED: "true"
+  SLACK_IMPORT_ENABLED: "false"
+  SLACK_IMPORT_CONCURRENCY: "1"
+
+  # Third-party integrations. The configuration loaders require a value for
+  # each of these at startup; the placeholders only satisfy them. A feature that
+  # calls the provider (Stripe billing, GitHub sync, LLM chat, push, ...) needs a
+  # real key here and does not work without one.
+  POSTHOG_API_KEY: local-posthog-project-key
+  POSTHOG_FEATURE_FLAGS_SECURE_API_KEY: local-posthog-feature-flags-key
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-local-google-client}
+  GOOGLE_CLIENT_SECRET_KEY: ${GOOGLE_CLIENT_SECRET:-local-google-client-secret}
+  GITHUB_CLIENT_ID: local-github-client
+  GITHUB_CLIENT_SECRET: local-github-client-secret
+  GITHUB_IDP_ID: 99999999-9999-4999-8999-999999999999
+  GITHUB_SYNC_APP_CLIENT_ID: local-github-sync-client
+  GITHUB_SYNC_APP_CLIENT_SECRET: local-github-sync-secret
+  GITHUB_SYNC_APP_PEM_SECRET_KEY: local-github-sync-pem
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-local-stripe-secret}
+  STRIPE_PRICE_ID: price_local
+  STRIPE_COMPUTER_STANDARD_MONTHLY_PRICE_ID: price_local_computer_standard_monthly
+  STRIPE_COMPUTER_LARGE_MONTHLY_PRICE_ID: price_local_computer_large_monthly
+  STRIPE_COMPUTER_XL_MONTHLY_PRICE_ID: price_local_computer_xl_monthly
+  STRIPE_COMPUTER_STANDARD_YEARLY_PRICE_ID: price_local_computer_standard_yearly
+  STRIPE_COMPUTER_LARGE_YEARLY_PRICE_ID: price_local_computer_large_yearly
+  STRIPE_COMPUTER_XL_YEARLY_PRICE_ID: price_local_computer_xl_yearly
+  AI_USAGE_FREE_INCLUDED_ALLOWANCE_CENTS: "500"
+  AI_USAGE_INCLUDED_ALLOWANCE_CENTS: "1500"
+  AI_USAGE_MAX_INCLUDED_ALLOWANCE_CENTS: "15000"
+  AI_USAGE_OVERAGE_MARKUP_PERCENT: "25"
+  GMAIL_GCP_QUEUE: gmail-gcp-queue-local
+  APPLE_BUNDLE_ID: com.macro.local
+  SNS_APNS_PLATFORM_ARN: arn:aws:sns:us-east-1:000000000000:app/APNS/macro-local
+  SNS_FCM_PLATFORM_ARN: arn:aws:sns:us-east-1:000000000000:app/GCM/macro-local
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-local-anthropic-key}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-local-openai-key}
+  GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-local-google-generative-ai-key}
+  FIREWORK_API_KEY: local-firework-key
+  CEREBRAS_API_KEY: local-cerebras-key
+  COHERE_API_KEY: local-cohere-key
+  CAPSOLVER_API_KEY: ""
+  OPENAI_DOMAIN_VERIFICATION_TOKEN: local-openai-domain-verification-token
+  PIPEDREAM_CLIENT_ID: local-pipedream-client
+  PIPEDREAM_CLIENT_SECRET: local-pipedream-secret
+  PIPEDREAM_PROJECT_ID: proj_local
+  SLACK_MCP_CLIENT_ID: local-slack-mcp-client
+  SLACK_MCP_CLIENT_SECRET: local-slack-mcp-secret
+  LIVEKIT_SERVER_URL: http://localhost:7880
+  LIVEKIT_API_KEY: local-livekit-key
+  LIVEKIT_API_SECRET: local-livekit-secret
+  CAL_EVENT_TYPE_CONTENT_NAMES_KEY: '{"1":{"content_name":"local","value":0}}'
+  META_PIXEL_ID: local-meta-pixel
+  META_ACCESS_TOKEN: local-meta-access-token
+  HARNESS_BOT_ID: 00000000-0000-0000-0000-00000000a9e7
+  MAX_REPO_SIZE_BYTES: "524288000"
+  PUSHES_PER_MINUTE: "30"
+  REPO_STORAGE_ROOT: /data/agent-git
+  # Agent sandboxes: this stack has no Docker socket mount and no Daytona
+  # account, so coder-bot sessions have nowhere to run. The in-process assistant
+  # does not need either.
+  DAYTONA_API_KEY: ""
+  DAYTONA_SNAPSHOT: macro-agent-harness
+  DEV_DANGEROUS_LOCAL_CONTAINERS: "false"
+  PREVIEW_DOMAIN: preview.localhost
+  PREVIEW_SSH_HOST: localhost
+  PREVIEW_SSH_HOST_KEY: ${PREVIEW_SSH_HOST_KEY}
+  PREVIEW_SSH_PROXY_HOST: ""
+  PREVIEW_SSH_PUBLIC_PORT: "2222"
+  PREVIEW_HTTPS_PORT: "8443"
+  COMPUTERS_AGENT_EFFECTS: "false"
+
+x-service: &service
+  image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-services:${MACRO_VERSION:-latest}
+  restart: unless-stopped
+  environment: *macro-env
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "3"
+
+x-healthcheck: &healthcheck
+  interval: 15s
+  timeout: 5s
+  retries: 5
+  start_period: 30s
+
+services:
+  # --- Infrastructure -------------------------------------------------------
+
+  postgres:
+    # pgvector: the migrations create the `vector` extension.
+    image: pgvector/pgvector:pg18
+    restart: unless-stopped
+    # The default 100 connections is exhausted when every service's pool fills
+    # under load, e.g. a large mailbox backfill. pg_stat_statements is installed
+    # by a migration and has to be preloaded.
+    command: postgres -c max_connections=500 -c shared_preload_libraries=pg_stat_statements
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-macro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: macrodb
+    volumes:
+      # pg18 images keep PGDATA in a version-specific subdirectory; mount the
+      # parent so it lands inside the volume (docker-library/postgres#1259).
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-macro} -d macrodb"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  redis:
+    # Redis Stack: the services use RedisJSON/RediSearch, not just the core.
+    image: redis/redis-stack-server:latest
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    # Single-node KRaft: this node is both broker and controller.
+    image: apache/kafka:3.9.1
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # A fixed cluster id lets the data volume survive container recreation.
+      CLUSTER_ID: TWFjcm9Mb2NhbEthZmthMQ
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 > /dev/null 2>&1
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 40s
+
+  kafka-topics:
+    # Creates the declared event topics (.github/kafka-cluster-topics.json).
+    image: apache/kafka:3.9.1
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./kafka-topics.txt:/topics.txt:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        while read -r topic; do
+          [ -n "$$topic" ] || continue
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
+            --create --if-not-exists --topic "$$topic" --partitions 6 --replication-factor 1
+        done < /topics.txt
+
+  search:
+    # OpenSearch with the analysis-icu plugin the channels index mapping needs.
+    image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-opensearch:${MACRO_VERSION:-latest}
+    build:
+      context: ../../infra/local/opensearch
+    restart: unless-stopped
+    environment:
+      cluster.name: search
+      discovery.type: single-node
+      node.name: search
+      bootstrap.memory_lock: "true"
+      OPENSEARCH_JAVA_OPTS: ${OPENSEARCH_JAVA_OPTS:--Xms512m -Xmx512m}
+      # Without the security plugin there is no security to disable.
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: curl --fail --silent --output /dev/null http://localhost:9200/
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 40s
+
+  localstack:
+    # AWS stand-in for SQS, S3, DynamoDB and KMS. The 4.x line is the last that
+    # runs without an account token.
+    image: localstack/localstack:4
+    restart: unless-stopped
+    environment:
+      SERVICES: sqs,s3,dynamodb,kms
+      DEFAULT_REGION: us-east-1
+      PERSISTENCE: ${LOCALSTACK_PERSISTENCE:-1}
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - ./localstack/provision.sh:/etc/localstack/init/ready.d/provision.sh:ro
+    healthcheck:
+      # `ready` also waits for the init scripts, i.e. the queues and buckets.
+      test: ["CMD-SHELL", "curl -fs http://localhost:4566/_localstack/init/ready | grep -q '\"completed\": true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 15s
+
+  mailpit:
+    # Catches outgoing mail, including sign-in codes. Replace by pointing
+    # SMTP_HOST at a real mail server.
+    image: axllent/mailpit:v1.20
+    restart: unless-stopped
+    environment:
+      MP_WEBROOT: /mailpit
+      MP_MAX_MESSAGES: "5000"
+    volumes:
+      - mailpit_data:/data
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Identity -----------------------------------------------------------------
+
+  fusionauth-db:
+    image: postgres:16.0-bookworm
+    restart: unless-stopped
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${FUSIONAUTH_DB_PASSWORD}
+    volumes:
+      - fusionauth_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  fusionauth-kickstart:
+    # Renders the file FusionAuth applies on its first boot (signing key, tenant,
+    # the Macro application, admin user, webhooks).
+    image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-bootstrap:${MACRO_VERSION:-latest}
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.selfhost-bootstrap
+    restart: "no"
+    command: ["macro-render-kickstart", "/kickstart/kickstart.json"]
+    environment:
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN}
+      AUTH_PUBLIC_URL: ${PUBLIC_ORIGIN}/auth
+      FUSIONAUTH_API_KEY: ${FUSIONAUTH_API_KEY}
+      FUSIONAUTH_CLIENT_SECRET: ${FUSIONAUTH_CLIENT_SECRET}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      INTERNAL_API_SECRET_KEY: ${INTERNAL_API_SECRET_KEY}
+      ADMIN_EMAIL: ${FUSIONAUTH_ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${FUSIONAUTH_ADMIN_PASSWORD}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_SECURITY: ${SMTP_SECURITY:-NONE}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-noreply@macro.local}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-local-google-client}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-local-google-client-secret}
+    volumes:
+      - fusionauth_kickstart:/kickstart
+
+  fusionauth:
+    image: fusionauth/fusionauth-app:1.62.1
+    restart: unless-stopped
+    init: true
+    depends_on:
+      fusionauth-db:
+        condition: service_healthy
+      fusionauth-kickstart:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: jdbc:postgresql://fusionauth-db:5432/fusionauth
+      DATABASE_ROOT_USERNAME: postgres
+      DATABASE_ROOT_PASSWORD: ${FUSIONAUTH_DB_PASSWORD}
+      DATABASE_USERNAME: fusionauth
+      DATABASE_PASSWORD: ${FUSIONAUTH_DB_PASSWORD}
+      FUSIONAUTH_APP_KICKSTART_FILE: /usr/local/fusionauth/kickstart/kickstart.json
+      FUSIONAUTH_APP_MEMORY: 512M
+      FUSIONAUTH_APP_RUNTIME_MODE: production
+      FUSIONAUTH_APP_URL: http://fusionauth:9011
+    ports:
+      # The admin UI. Loopback only: it is not part of the proxied origin.
+      - "127.0.0.1:${FUSIONAUTH_PORT:-9011}:9011"
+    volumes:
+      - fusionauth_config:/usr/local/fusionauth/config
+      - fusionauth_kickstart:/usr/local/fusionauth/kickstart:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s --max-time 4 http://localhost:9011/api/status | grep -q '\"status\":\"Ok\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # --- One-shot setup ---------------------------------------------------------------
+
+  migrate:
+    image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-bootstrap:${MACRO_VERSION:-latest}
+    restart: "no"
+    command: ["macro-migrate"]
+    environment:
+      DATABASE_URL: *database-url
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  create-indices:
+    image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-bootstrap:${MACRO_VERSION:-latest}
+    restart: "no"
+    command: ["macro-create-indices"]
+    environment:
+      OPENSEARCH_URL: http://search:9200
+    depends_on:
+      search:
+        condition: service_healthy
+
+  # --- Backend services ---------------------------------------------------------------
+
+  authentication-service:
+    <<: *service
+    command: ["/app/out/authentication_service"]
+    depends_on: &base-depends
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      kafka-topics:
+        condition: service_completed_successfully
+      fusionauth:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+
+  connection-gateway:
+    <<: *service
+    command: ["/app/out/connection_gateway_service"]
+    depends_on: *base-depends
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+
+  contacts-service:
+    <<: *service
+    command: ["/app/out/contacts_service"]
+    depends_on: *base-depends
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+
+  document-storage-service:
+    <<: *service
+    command: ["/app/out/document_storage_service"]
+    networks:
+      default:
+        aliases:
+          # The sync worker's wrangler.docker.toml dials DSS by this name.
+          - document_storage_service
+    depends_on:
+      <<: *base-depends
+      authentication-service:
+        condition: service_healthy
+      connection-gateway:
+        condition: service_healthy
+      sync-service:
+        condition: service_healthy
+      lexical-service:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+
+  document-upload-finalizer:
+    # LocalStack S3 ObjectCreated -> SQS consumer. Production runs the
+    # document_upload_finalizer_handler Lambda instead.
+    <<: *service
+    command: ["/app/out/document_upload_finalizer_local_worker"]
+    depends_on:
+      <<: *base-depends
+      sync-service:
+        condition: service_healthy
+      lexical-service:
+        condition: service_healthy
+
+  email-service:
+    <<: *service
+    command: ["/app/out/email_service"]
+    depends_on:
+      <<: *base-depends
+      authentication-service:
+        condition: service_healthy
+      connection-gateway:
+        condition: service_healthy
+      document-storage-service:
+        condition: service_healthy
+      static-file-service:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+
+  email-pubsub-workers:
+    <<: *service
+    command: ["/app/out/pubsub_workers"]
+    depends_on:
+      <<: *base-depends
+      email-service:
+        condition: service_healthy
+
+  calendar-service:
+    <<: *service
+    command: ["/app/out/calendar_service"]
+    depends_on:
+      <<: *base-depends
+      authentication-service:
+        condition: service_healthy
+      connection-gateway:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+
+  notification-service:
+    <<: *service
+    command: ["/app/out/notification_service"]
+    depends_on:
+      <<: *base-depends
+      authentication-service:
+        condition: service_healthy
+      connection-gateway:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+
+  search-processing-service:
+    <<: *service
+    command: ["/app/out/search_processing_service"]
+    depends_on:
+      <<: *base-depends
+      create-indices:
+        condition: service_completed_successfully
+      search:
+        condition: service_healthy
+      lexical-service:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+
+  agent-harness-service:
+    # The assistant, agent sessions, connectors and scheduled actions. The web
+    # app calls it on every page load, so the app does not work without it.
+    <<: *service
+    command: ["/app/out/agent_harness_service"]
+    volumes:
+      - agent_git_repos:/data/agent-git
+    depends_on:
+      <<: *base-depends
+      connection-gateway:
+        condition: service_healthy
+      lexical-service:
+        condition: service_healthy
+      sync-service:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+
+  static-file-service:
+    <<: *service
+    command: ["/app/out/static_file_service"]
+    depends_on: *base-depends
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/api/health"]
+
+  unfurl-service:
+    <<: *service
+    command: ["/app/out/unfurl_service"]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+
+  image-proxy-service:
+    <<: *service
+    command: ["/app/out/image_proxy_service"]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health"]
+
+  # --- Workers (Cloudflare Workers and Bun, run locally) -----------------------------------
+
+  sync-service:
+    # The document sync worker: wrangler runs it on workerd, with its Durable
+    # Object, KV and D1 state in /app/.wrangler/state.
+    image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-sync-service:${MACRO_VERSION:-latest}
+    build:
+      context: ../..
+      dockerfile: docker/sync-service.Dockerfile
+    restart: unless-stopped
+    environment:
+      INTERNAL_API_SECRET_KEY: ${INTERNAL_API_SECRET_KEY}
+      DOCUMENT_PERMISSIONS_SECRET: ${DOCUMENT_PERMISSION_SECRET}
+      DSS_INTERNAL_AUTH_KEY: ${INTERNAL_API_SECRET_KEY}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    volumes:
+      - sync_state:/app/.wrangler/state
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8787/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  lexical-service:
+    image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-lexical-service:${MACRO_VERSION:-latest}
+    build:
+      context: ../..
+      dockerfile: docker/lexical-service.Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "8096"
+      INTERNAL_AUTH_KEY: ${INTERNAL_API_SECRET_KEY}
+      SYNC_SERVICE_AUTH_KEY: ${INTERNAL_API_SECRET_KEY}
+      SYNC_SERVICE_URL: http://sync-service:8787
+    depends_on:
+      sync-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:8096/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
+
+  websocket-service:
+    # A small WebSocket endpoint the app connects to at /websocket.
+    image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-websocket-service:${MACRO_VERSION:-latest}
+    build:
+      context: ../..
+      dockerfile: docker/websocket-service.Dockerfile
+    restart: unless-stopped
+
+  # --- Edge ------------------------------------------------------------------------------
+
+  proxy:
+    # Caddy: serves the web app and routes every backend path (Caddyfile).
+    image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-web:${MACRO_VERSION:-latest}
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.selfhost-web
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost:8090}
+      TLS_MODE: ${TLS_MODE:-internal}
+    ports:
+      - "${PROXY_PORT:-8090}:${PROXY_PORT:-8090}"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      authentication-service:
+        condition: service_healthy
+      document-storage-service:
+        condition: service_healthy
+      agent-harness-service:
+        condition: service_healthy
+      websocket-service:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  redis_data:
+  kafka_data:
+  opensearch_data:
+  localstack_data:
+  mailpit_data:
+  fusionauth_db_data:
+  fusionauth_config:
+  fusionauth_kickstart:
+  sync_state:
+  agent_git_repos:
+  caddy_data:
+  caddy_config:

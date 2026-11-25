@@ -1,0 +1,17 @@
+#!/bin/sh
+# Create the search indices and aliases (documents, emails, channels, chats,
+# call_records) in OpenSearch. The helper scripts are idempotent and dry-run by
+# default, so DRY_RUN is set to apply them for real.
+set -eu
+
+: "${OPENSEARCH_URL:?OPENSEARCH_URL is required}"
+
+# The cluster runs without the security plugin, so the credentials are ignored
+# but the client refuses to start without them.
+export OPENSEARCH_USERNAME="${OPENSEARCH_USERNAME:-macrouser}"
+export OPENSEARCH_PASSWORD="${OPENSEARCH_PASSWORD:-local}"
+export ENVIRONMENT=local
+export DRY_RUN=false
+
+cd /bootstrap/opensearch
+exec bun run scripts/create_indices.ts

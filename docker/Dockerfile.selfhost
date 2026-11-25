@@ -1,0 +1,87 @@
+# syntax=docker/dockerfile:1
+#
+# Backend services for the self-host stack (docker/selfhost/docker-compose.yml).
+#
+# One image holds every Rust service binary under /app/out, and the compose
+# file picks the binary per service with `command:`, as docker/Dockerfile.dev
+# does for the local stack. Unlike that file this builds the release profile,
+# so the published image is a production-grade build rather than a debug one.
+#
+# Build from the repository root:
+#   docker build -f docker/Dockerfile.selfhost -t macro-services .
+# Build faster for a local trial (debug profile, no optimization):
+#   docker build -f docker/Dockerfile.selfhost --build-arg CARGO_PROFILE=dev -t macro-services .
+FROM rust:1.94.0-bookworm AS builder
+
+ENV SQLX_OFFLINE=true
+# cmake builds librdkafka (rdkafka-sys, reached through workspace-hack for
+# every binary); rust:bookworm does not ship it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cmake \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# rust-toolchain.toml also names components and cross targets this image never
+# uses; selecting the installed toolchain explicitly makes rustup skip the
+# file instead of downloading them on the first cargo call.
+ENV RUSTUP_TOOLCHAIN=1.94.0
+
+# code_mode_assets' build script runs packages/code-mode-sdk's generator with
+# bun, which needs the root and packages/sdk JavaScript dependencies installed
+# (the nix shell provides both in the local stack).
+COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
+
+WORKDIR /app
+COPY . .
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install --frozen-lockfile \
+    && (cd packages/sdk && bun install --frozen-lockfile)
+
+ARG CARGO_PROFILE=release
+ARG CARGO_BUILD_JOBS=0
+
+# `dev` is the profile name, `debug` the directory cargo writes it to.
+# search_processing_service builds without pdfium: its bundled library is
+# amd64-only and absent from the runtime image, as in the local stack.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
+    --mount=type=cache,target=/usr/local/cargo/git/db,sharing=shared \
+    --mount=type=cache,target=/app/target,id=macro-selfhost-target-${CARGO_PROFILE},sharing=locked \
+    set -eu; \
+    jobs="${CARGO_BUILD_JOBS}"; \
+    if [ "${jobs}" = "0" ]; then jobs="$(nproc)"; fi; \
+    dir="${CARGO_PROFILE}"; \
+    if [ "${dir}" = "dev" ]; then dir="debug"; fi; \
+    bins="authentication_service connection_gateway_service contacts_service \
+      document_storage_service document_upload_finalizer_local_worker \
+      email_service pubsub_workers calendar_service notification_service \
+      search_processing_service static_file_service unfurl_service \
+      image_proxy_service agent_harness_service"; \
+    args=""; \
+    for bin in ${bins}; do args="${args} --bin ${bin}"; done; \
+    cargo build -j "${jobs}" --profile "${CARGO_PROFILE}" \
+      --features search_processing_service/no_pdf ${args}; \
+    mkdir -p /app/out; \
+    for bin in ${bins}; do \
+      cp "/app/target/${dir}/${bin}" "/app/out/${bin}"; \
+      if [ "${CARGO_PROFILE}" != "dev" ]; then strip "/app/out/${bin}"; fi; \
+    done
+
+FROM denoland/deno:2.9.6 AS deno
+
+FROM debian:trixie-slim AS runtime
+# curl backs the compose healthchecks. git serves the agent harness's agent git
+# remotes (`git http-backend`), and deno runs its code-mode subprocesses.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates dumb-init curl git \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+COPY --from=deno /usr/bin/deno /usr/local/bin/deno
+ENV DENO_BINARY=/usr/local/bin/deno
+WORKDIR /app
+COPY --from=builder /app/out/ /app/out/
+RUN chmod +x /app/out/*
+# The services take a deep request (a first mailbox backfill, a Soup query) on
+# a worker thread; the default 2 MiB stack overflows and aborts the process.
+ENV RUST_MIN_STACK=67108864
+ENV PORT=8080
+EXPOSE 8080
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["/app/out/authentication_service"]

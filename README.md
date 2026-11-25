@@ -252,7 +252,7 @@ Deeper reading: [mentions](https://docs.macro.com/concepts/mentions), [propertie
 
 # Running it locally
 
-To run the frontend against hosted services, or to run the local stack, follow [Running locally](docs/development/running-locally.md).
+To run the frontend against hosted services, or to run the local stack, follow [Running locally](docs/development/running-locally.md). To run Macro from published Docker images with Docker Compose, with no build step, follow [Self-host with Docker Compose](docker/selfhost/README.md).
 
 To contribute, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -270,7 +270,7 @@ Enterprise-grade security. Zero data retention with model providers, including n
 
 Macro is fully open source — not "open core" — under the GNU Affero General Public License v3.0. See `LICENSE.txt` for details.
 
-You can self-host Macro under the terms of the AGPLv3; the [FAQ](https://docs.macro.com/faq) covers what that involves. If you want to build on top of Macro under a different license, contact [licensing@macro.com](mailto:licensing@macro.com). For managed hosting or commercial arrangements, contact [self-host@macro.com](mailto:self-host@macro.com).
+You can self-host Macro under the terms of the AGPLv3; the [FAQ](https://docs.macro.com/faq) covers what that involves. To run it from published Docker images with Docker Compose, see [docker/selfhost](docker/selfhost/README.md). If you want to build on top of Macro under a different license, contact [licensing@macro.com](mailto:licensing@macro.com). For managed hosting or commercial arrangements, contact [self-host@macro.com](mailto:self-host@macro.com).
 
 <br />
 

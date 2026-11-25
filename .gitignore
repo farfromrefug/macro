@@ -3,6 +3,8 @@
 **/.env*
 **/*.env
 **/*.env.*
+# The self-host stack's template; its generated .env stays ignored.
+!docker/selfhost/.env.example
 **/.dev.vars*
 .idea/
 **/.DS_Store
