@@ -187,9 +187,11 @@ files in them.
   sandboxes for the coder bot (`Code` mode) are not available: they need a Docker
   socket or a Daytona account, and this stack mounts neither. AI document editing
   needs the AI editing worker, which is not included.
-- **Connectors** (Slack, Notion, GitHub and the rest of the catalog) need
-  Pipedream, GitHub and Slack credentials. Without them the connectors list
-  returns an error and nothing can be connected.
+- **Connectors** (the catalog of hundreds of apps) are served by Pipedream, a hosted
+  third-party broker, so they are off by default (`PIPEDREAM_*` blank). Servers
+  added by URL and vendors that run their own MCP server connect directly with
+  Macro's own OAuth client, with no broker. Linear, Notion and Jira *imports*
+  read the vendor API through the broker and do not work without it yet.
 - **Gmail and Outlook** need real OAuth clients. Set `GOOGLE_CLIENT_ID` and
   `GOOGLE_CLIENT_SECRET` **before the first `up`**: they are written into
   FusionAuth's identity provider on its first boot. Until then "Continue with

@@ -225,9 +225,11 @@ x-macro-env: &macro-env
   COHERE_API_KEY: local-cohere-key
   CAPSOLVER_API_KEY: ""
   OPENAI_DOMAIN_VERIFICATION_TOKEN: local-openai-domain-verification-token
-  PIPEDREAM_CLIENT_ID: local-pipedream-client
-  PIPEDREAM_CLIENT_SECRET: local-pipedream-secret
-  PIPEDREAM_PROJECT_ID: proj_local
+  # Pipedream is a hosted third-party broker; with these blank the harness runs
+  # without it (the connectors catalog is then empty). Fill all three to use it.
+  PIPEDREAM_CLIENT_ID: ${PIPEDREAM_CLIENT_ID:-}
+  PIPEDREAM_CLIENT_SECRET: ${PIPEDREAM_CLIENT_SECRET:-}
+  PIPEDREAM_PROJECT_ID: ${PIPEDREAM_PROJECT_ID:-}
   SLACK_MCP_CLIENT_ID: local-slack-mcp-client
   SLACK_MCP_CLIENT_SECRET: local-slack-mcp-secret
   # Video calls. These point at the `livekit` service when the `calls` profile
