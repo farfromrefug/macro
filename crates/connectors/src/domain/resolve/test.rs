@@ -8,7 +8,7 @@ use crate::domain::models::{
 };
 use crate::domain::ports::{ApiConnection, GrantState, McpConnection};
 use mcp_toolset::McpServer;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 mod properties;
@@ -87,9 +87,10 @@ fn held(source: SourceKind, key: ConnectorKey) -> SourceConnection {
         SourceKind::Pipedream | SourceKind::Connect | SourceKind::Token => Some(Arc::new(Undialed)),
         SourceKind::Native | SourceKind::GithubLink => None,
     };
-    // An instance token is a REST API only.
+    // An instance token is a REST API, and MCP only where the app's server
+    // takes the token (Linear).
     let mcp: Option<Arc<dyn McpConnection>> =
-        (source != SourceKind::Token).then(|| Arc::new(Undialed) as _);
+        (source != SourceKind::Token || key == app_key("linear")).then(|| Arc::new(Undialed) as _);
     SourceConnection {
         source,
         source_id: key.to_string(),
@@ -214,7 +215,10 @@ fn github_macro_connect_on_connect_does_not_serve_it_counts_the_link() {
 
 /// The overlay table with an instance token for Notion and Linear.
 fn token_overlays() -> Overlays {
-    overlays().with_token_apps(&HashSet::from([app("notion"), app("linear")]))
+    overlays().with_token_apps(&HashMap::from([
+        (app("notion"), Surfaces::new(false, true)),
+        (app("linear"), Surfaces::new(true, true)),
+    ]))
 }
 
 fn run_with_tokens(

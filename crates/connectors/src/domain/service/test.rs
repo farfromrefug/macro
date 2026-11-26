@@ -137,7 +137,7 @@ impl World {
             Some(Arc::new(self.source(SourceKind::Native))),
             FakeMacroConnectEnabledFlag(self.flags.clone()),
             FakeOverlays(Self::overlays()),
-            HashSet::new(),
+            HashMap::new(),
         )
     }
 

@@ -98,9 +98,12 @@ connection.
   installations with no Pipedream: the Linear and Notion importers read those
   vendors' REST APIs (Jira has no token app yet) through an `ApiConnection`, which only Pipedream and
   Connect provided. One token is the connection of every user, so the importer
-  reads with that token's access, not the user's. It has no MCP, no per-user
-  row and no holders, refuses connect, rename, disable and remove, and sends
-  the token only to the vendor's own origin (no redirects, no trace context).
+  reads with that token's access, not the user's. Linear's hosted MCP server
+  takes the token as a bearer, so Linear also serves MCP (agents and the
+  sandbox proxy); Notion's takes OAuth sign-ins only, so Notion is API only.
+  It has no per-user row and no holders, refuses connect, rename, disable and
+  remove, and sends the token only to the vendor's own origin (no redirects, no
+  trace context).
   A token app's Pipedream connection is ignored, as an overlaid app's is.
 
 ## Related

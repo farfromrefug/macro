@@ -219,7 +219,7 @@ impl FakeConnectors {
             Some(servers),
             FakeMacroConnectEnabledFlag(self.flags.clone()),
             FakeOverlays(overlays),
-            std::collections::HashSet::new(),
+            std::collections::HashMap::new(),
         )
     }
 

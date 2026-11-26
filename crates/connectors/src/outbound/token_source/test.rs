@@ -1,6 +1,8 @@
 use super::*;
+use crate::outbound::guarded_http::AddressPolicy;
 use http::{HeaderMap, Method};
 use macro_user_id::cowlike::CowLike;
+use std::collections::HashSet;
 
 const LINEAR_KEY: &str = "lin_api_abc123";
 const NOTION_TOKEN: &str = "ntn_secret";
@@ -15,11 +17,18 @@ fn app(slug: &str) -> ConnectorId {
     ConnectorId::parse(slug).unwrap()
 }
 
+fn mcp_http() -> McpHttp {
+    McpHttp::new(AddressPolicy::PublicOnly).unwrap()
+}
+
 fn source() -> TokenSource {
-    TokenSource::new(vec![
-        TokenAppConfig::linear(LINEAR_KEY),
-        TokenAppConfig::notion(NOTION_TOKEN),
-    ])
+    TokenSource::new(
+        vec![
+            TokenAppConfig::linear(LINEAR_KEY),
+            TokenAppConfig::notion(NOTION_TOKEN),
+        ],
+        mcp_http(),
+    )
     .unwrap()
 }
 
@@ -89,22 +98,31 @@ fn a_token_that_cannot_be_a_header_value_is_refused() {
 
 #[test]
 fn tokens_are_trimmed_and_blank_ones_leave_the_app_out() {
-    let source = TokenSource::new(vec![
-        TokenAppConfig::linear("  \n"),
-        TokenAppConfig::notion(&format!("{NOTION_TOKEN}\n")),
-    ])
+    let source = TokenSource::new(
+        vec![
+            TokenAppConfig::linear("  \n"),
+            TokenAppConfig::notion(&format!("{NOTION_TOKEN}\n")),
+        ],
+        mcp_http(),
+    )
     .unwrap();
 
-    assert_eq!(source.apps(), HashSet::from([app("notion")]));
+    assert_eq!(
+        source.apps().into_keys().collect::<HashSet<_>>(),
+        HashSet::from([app("notion")])
+    );
     assert_eq!(connection(&source, "notion").token.0, NOTION_TOKEN);
 }
 
 #[test]
 fn an_app_given_twice_keeps_the_last_token() {
-    let source = TokenSource::new(vec![
-        TokenAppConfig::notion("first"),
-        TokenAppConfig::notion("last"),
-    ])
+    let source = TokenSource::new(
+        vec![
+            TokenAppConfig::notion("first"),
+            TokenAppConfig::notion("last"),
+        ],
+        mcp_http(),
+    )
     .unwrap();
 
     assert_eq!(source.connections.len(), 1);
@@ -119,7 +137,7 @@ fn a_token_never_shows_in_debug_output() {
 }
 
 #[tokio::test]
-async fn every_user_holds_a_working_api_only_connection_to_each_app() {
+async fn every_user_holds_a_working_connection_to_each_app() {
     let source = source();
 
     for email in ["a@example.com", "b@example.com"] {
@@ -137,15 +155,48 @@ async fn every_user_holds_a_working_api_only_connection_to_each_app() {
             assert_eq!(held.source, SourceKind::Token);
             assert!(held.enabled);
             assert_eq!(held.grant, GrantState::Working);
-            assert!(held.mcp.is_none());
+            assert_eq!(
+                held.mcp.is_some(),
+                held.key == ConnectorKey::App(app("linear"))
+            );
             assert!(held.api.is_some());
         }
     }
 }
 
 #[tokio::test]
+async fn linear_serves_its_hosted_mcp_server_with_the_token_as_bearer() {
+    let source = source();
+    let held = source.connections(&user("a@example.com")).await.unwrap();
+    let linear = held
+        .into_iter()
+        .find(|held| held.key == ConnectorKey::App(app("linear")))
+        .unwrap();
+
+    let upstream = linear.mcp.unwrap().upstream().await.unwrap();
+
+    assert_eq!(upstream.url().as_str(), "https://mcp.linear.app/mcp");
+    assert_eq!(upstream.bearer(), Some(LINEAR_KEY));
+}
+
+#[tokio::test]
+async fn notion_has_no_mcp_for_an_integration_token() {
+    let source = source();
+
+    assert_eq!(
+        source.supports(&app("notion")).await.unwrap(),
+        Some(Surfaces::new(false, true))
+    );
+    assert_eq!(
+        source.supports(&app("linear")).await.unwrap(),
+        Some(Surfaces::new(true, true))
+    );
+    assert!(connection(&source, "notion").mcp_target().is_err());
+}
+
+#[tokio::test]
 async fn it_supports_only_the_apps_with_a_token() {
-    let source = TokenSource::new(vec![TokenAppConfig::notion(NOTION_TOKEN)]).unwrap();
+    let source = TokenSource::new(vec![TokenAppConfig::notion(NOTION_TOKEN)], mcp_http()).unwrap();
 
     assert_eq!(
         source.supports(&app("notion")).await.unwrap(),

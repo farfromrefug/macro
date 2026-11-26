@@ -163,7 +163,7 @@ pub fn compose(
     let github = GithubLinkSource::new(
         Arc::new(AuthServiceGithubLink::new(auth_service)),
         servers,
-        http,
+        http.clone(),
         &config.app_origin,
     )?;
 
@@ -207,7 +207,7 @@ pub fn compose(
             pipedream_grants,
         )));
     }
-    let token_source = TokenSource::new(config.token_apps)?;
+    let token_source = TokenSource::new(config.token_apps, http.clone())?;
     let token_apps = token_source.apps();
     if !token_apps.is_empty() {
         sources.push(Arc::new(token_source));

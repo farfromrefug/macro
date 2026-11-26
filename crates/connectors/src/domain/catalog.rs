@@ -3,7 +3,7 @@
 //! serves.
 
 use crate::domain::models::{ConnectorId, ServerUrl, Surfaces};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 #[cfg(test)]
 mod test;
@@ -43,7 +43,7 @@ pub(crate) fn slugs_of(app: &ConnectorId) -> Vec<&str> {
 pub(crate) struct Overlays {
     servers: HashMap<ConnectorId, ServerUrl>,
     apps: HashMap<ServerUrl, BTreeSet<ConnectorId>>,
-    token_apps: HashSet<ConnectorId>,
+    token_apps: HashMap<ConnectorId, Surfaces>,
 }
 
 impl Overlays {
@@ -59,20 +59,25 @@ impl Overlays {
         Self {
             servers,
             apps,
-            token_apps: HashSet::new(),
+            token_apps: HashMap::new(),
         }
     }
 
     /// These routes, plus `token_apps`: the apps the instance token source
     /// serves.
-    pub(crate) fn with_token_apps(mut self, token_apps: &HashSet<ConnectorId>) -> Self {
+    pub(crate) fn with_token_apps(mut self, token_apps: &HashMap<ConnectorId, Surfaces>) -> Self {
         self.token_apps.clone_from(token_apps);
         self
     }
 
     /// Whether the instance token source serves `app`.
     pub(crate) fn is_token_app(&self, app: &ConnectorId) -> bool {
-        self.token_apps.contains(app)
+        self.token_apps.contains_key(app)
+    }
+
+    /// What the instance token source provides for `app`, when it serves it.
+    pub(crate) fn token_surfaces(&self, app: &ConnectorId) -> Option<Surfaces> {
+        self.token_apps.get(app).copied()
     }
 
     /// Whether `app` is overlaid.

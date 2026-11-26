@@ -219,7 +219,9 @@ files in them.
   read those vendors' APIs, so without Pipedream give them tokens:
   `LINEAR_API_KEY` and `NOTION_API_TOKEN` in `.env`. Each token is one for the
   whole instance: every user counts as connected, and an import reads with that
-  token's access, not the user's. Jira has no token option yet.
+  token's access, not the user's. The Linear key also gives agents Linear's
+  MCP tools; Notion's hosted MCP takes OAuth sign-ins only, so the Notion token
+  serves the importer, not agent tools. Jira has no token option yet.
 - **Gmail and Outlook** need real OAuth clients. Set `GOOGLE_CLIENT_ID` and
   `GOOGLE_CLIENT_SECRET` **before the first `up`**: they are written into
   FusionAuth's identity provider on its first boot. Until then "Continue with

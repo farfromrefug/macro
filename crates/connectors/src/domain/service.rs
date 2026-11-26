@@ -181,7 +181,7 @@ trait ReadOverlays: Send + Sync {
 /// every read of the routing table sees both.
 struct TokenRouted<O> {
     overlays: O,
-    token_apps: HashSet<ConnectorId>,
+    token_apps: HashMap<ConnectorId, Surfaces>,
 }
 
 #[async_trait::async_trait]
@@ -256,7 +256,7 @@ impl Connectors {
         servers: Option<Arc<dyn ServerDirectory>>,
         macro_connect_enabled: impl MacroConnectEnabledFlagReader,
         overlays: impl OverlayCatalog,
-        token_apps: HashSet<ConnectorId>,
+        token_apps: HashMap<ConnectorId, Surfaces>,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -542,7 +542,7 @@ impl Connectors {
                 let surfaces = match counted {
                     SourceKind::Connect => snapshot.connect.surfaces(app).unwrap_or_default(),
                     SourceKind::Pipedream => Surfaces::new(true, true),
-                    SourceKind::Token => Surfaces::new(false, true),
+                    SourceKind::Token => snapshot.overlays.token_surfaces(app).unwrap_or_default(),
                     SourceKind::Native | SourceKind::GithubLink => Surfaces::new(true, false),
                 };
                 listed.insert(

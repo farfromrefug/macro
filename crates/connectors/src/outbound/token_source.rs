@@ -4,22 +4,26 @@
 //!
 //! It exists for installations with no hosted broker (Pipedream), where the
 //! importers that read Linear or Notion over their REST APIs would otherwise
-//! have no connection. It provides API access only: no MCP, and no per-user
+//! have no connection. It provides API access, and MCP for the apps whose
+//! hosted MCP server takes the token as a bearer (Linear), and no per-user
 //! state, so nothing is stored and nothing to revoke. Connecting, renaming,
 //! turning off and removing are refused; the operator changes the token by
 //! changing the environment.
 
 use crate::domain::models::{
-    ApiRequest, ApiResponse, ConnectStep, ConnectorId, ConnectorKey, Surfaces,
+    ApiRequest, ApiResponse, ConnectStep, ConnectorId, ConnectorKey, Surfaces, Upstream,
 };
 use crate::domain::ports::{
-    ApiConnection, GrantState, Source, SourceConnection, SourceKind, SourceRefusal,
+    ApiConnection, GrantState, McpConnection, Source, SourceConnection, SourceKind, SourceRefusal,
 };
+use crate::outbound::guarded_http::McpHttp;
+use crate::outbound::native::models::{McpServer, dial_with_bearer};
 use http::HeaderValue;
 use http::header::AUTHORIZATION;
 use macro_user_id::user_id::MacroUserIdStr;
 use rootcause::Report;
-use std::collections::HashSet;
+use rootcause::compat::IntoRootcause as _;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,6 +80,20 @@ impl TokenApp {
             Self::Notion => "https://api.notion.com",
         }
     }
+
+    /// The app's hosted MCP server, when it takes the token as a bearer.
+    /// Notion's takes OAuth sign-ins only, not an integration token.
+    fn mcp_url(self) -> Option<&'static str> {
+        match self {
+            Self::Linear => Some("https://mcp.linear.app/mcp"),
+            Self::Notion => None,
+        }
+    }
+
+    /// What a connection to the app can be used as.
+    fn surfaces(self) -> Surfaces {
+        Surfaces::new(self.mcp_url().is_some(), true)
+    }
 }
 
 /// A token the operator gave an app for the whole instance.
@@ -130,9 +148,23 @@ struct TokenConnection {
     token: ApiToken,
     origin: Url,
     http: reqwest::Client,
+    /// The app's MCP server, when it takes the token.
+    mcp_url: Option<Url>,
+    mcp_http: McpHttp,
 }
 
 impl TokenConnection {
+    /// The MCP server and token, or why this app has none.
+    fn mcp_target(&self) -> Result<(&Url, &str), Report> {
+        let url = self.mcp_url.as_ref().ok_or_else(|| {
+            rootcause::report!(
+                "{} has no MCP server for an instance token",
+                self.kind.name()
+            )
+        })?;
+        Ok((url, self.token.0.as_str()))
+    }
+
     /// `url` as a URL on this app's origin and nowhere else: the same scheme,
     /// host and port, and no user info to confuse the host with.
     fn pinned(&self, url: &str) -> Result<Url, Report> {
@@ -151,6 +183,25 @@ impl TokenConnection {
         }
 
         Ok(url)
+    }
+}
+
+#[async_trait::async_trait]
+impl McpConnection for TokenConnection {
+    async fn dial(&self) -> Result<McpServer, Report> {
+        let (url, token) = self.mcp_target()?;
+        dial_with_bearer(&self.mcp_http, url, token)
+            .await
+            .into_rootcause()
+    }
+
+    async fn upstream(&self) -> Result<Upstream, Report> {
+        let (url, token) = self.mcp_target()?;
+        Ok(Upstream::new(
+            url.clone(),
+            Some(token.to_owned()),
+            http::HeaderMap::new(),
+        ))
     }
 }
 
@@ -203,7 +254,7 @@ pub(crate) struct TokenSource {
 impl TokenSource {
     /// A source over the tokens in `configs`, the last one winning for an app
     /// given twice. Blank tokens are left out.
-    pub(crate) fn new(configs: Vec<TokenAppConfig>) -> Result<Self, Report> {
+    pub(crate) fn new(configs: Vec<TokenAppConfig>, mcp_http: McpHttp) -> Result<Self, Report> {
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
@@ -222,6 +273,13 @@ impl TokenSource {
                 token: config.token,
                 origin,
                 http: http.clone(),
+                mcp_url: config
+                    .app
+                    .mcp_url()
+                    .map(Url::parse)
+                    .transpose()
+                    .map_err(Report::new)?,
+                mcp_http: mcp_http.clone(),
             });
             connections.retain(|held| held.kind != config.app);
             connections.push(connection);
@@ -231,10 +289,10 @@ impl TokenSource {
     }
 
     /// The apps this source holds a token for.
-    pub(crate) fn apps(&self) -> HashSet<ConnectorId> {
+    pub(crate) fn apps(&self) -> HashMap<ConnectorId, Surfaces> {
         self.connections
             .iter()
-            .map(|connection| connection.app.clone())
+            .map(|connection| (connection.app.clone(), connection.kind.surfaces()))
             .collect()
     }
 
@@ -272,15 +330,21 @@ impl Source for TokenSource {
                 name: connection.kind.name().to_owned(),
                 enabled: true,
                 grant: GrantState::Working,
-                mcp: None,
+                mcp: connection
+                    .mcp_url
+                    .is_some()
+                    .then(|| connection.clone() as Arc<dyn McpConnection>),
                 api: Some(connection.clone()),
             })
             .collect())
     }
 
-    /// The REST API of each app with a token.
+    /// The REST API of each app with a token, and its MCP server where the
+    /// token opens one.
     async fn supports(&self, app: &ConnectorId) -> Result<Option<Surfaces>, Report> {
-        Ok(self.serving(app).map(|_| Surfaces::new(false, true)))
+        Ok(self
+            .serving(app)
+            .map(|connection| connection.kind.surfaces()))
     }
 
     /// Nobody: the token belongs to the instance, so there are no per-user
