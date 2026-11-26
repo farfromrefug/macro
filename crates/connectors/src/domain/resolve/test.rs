@@ -8,6 +8,7 @@ use crate::domain::models::{
 };
 use crate::domain::ports::{ApiConnection, GrantState, McpConnection};
 use mcp_toolset::McpServer;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 mod properties;
@@ -83,9 +84,12 @@ fn connect() -> ConnectSupport {
 /// where the source can, an API. Its name says which source it came from.
 fn held(source: SourceKind, key: ConnectorKey) -> SourceConnection {
     let api: Option<Arc<dyn ApiConnection>> = match source {
-        SourceKind::Pipedream | SourceKind::Connect => Some(Arc::new(Undialed)),
+        SourceKind::Pipedream | SourceKind::Connect | SourceKind::Token => Some(Arc::new(Undialed)),
         SourceKind::Native | SourceKind::GithubLink => None,
     };
+    // An instance token is a REST API only.
+    let mcp: Option<Arc<dyn McpConnection>> =
+        (source != SourceKind::Token).then(|| Arc::new(Undialed) as _);
     SourceConnection {
         source,
         source_id: key.to_string(),
@@ -93,7 +97,7 @@ fn held(source: SourceKind, key: ConnectorKey) -> SourceConnection {
         key,
         enabled: true,
         grant: GrantState::Working,
-        mcp: Some(Arc::new(Undialed)),
+        mcp,
         api,
     }
 }
@@ -203,6 +207,116 @@ fn github_macro_connect_on_connect_does_not_serve_it_counts_the_link() {
     assert_eq!(
         handle_name(&resolution, &app_key("github")).as_deref(),
         Some("GithubLink")
+    );
+}
+
+// The table: an app with an instance token.
+
+/// The overlay table with an instance token for Notion and Linear.
+fn token_overlays() -> Overlays {
+    overlays().with_token_apps(&HashSet::from([app("notion"), app("linear")]))
+}
+
+fn run_with_tokens(
+    macro_connect_enabled: MacroConnectEnabledFlag,
+    connections: Vec<SourceConnection>,
+) -> Resolution {
+    resolve(
+        &user(),
+        macro_connect_enabled,
+        &token_overlays(),
+        &connect(),
+        connections,
+    )
+}
+
+#[test]
+fn token_app_macro_connect_off_counts_the_token_and_provides_its_api_only() {
+    let resolution = run_with_tokens(
+        MacroConnectEnabledFlag::Off,
+        vec![
+            held(SourceKind::Token, app_key("notion")),
+            held(SourceKind::Pipedream, app_key("notion")),
+        ],
+    );
+
+    assert_eq!(resolution.mcp.status(&app_key("notion")), Status::Connected);
+    let resolved = resolution.mcp.resolved();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].name, "Token");
+    assert_eq!(resolved[0].surfaces, Surfaces::new(false, true));
+    assert_eq!(resolution.mcp.handles().count(), 0);
+    assert_eq!(resolution.api.len(), 1);
+    assert_eq!(resolution.api[0].app(), &app("notion"));
+}
+
+#[test]
+fn token_app_ignores_a_pipedream_connection_without_the_token() {
+    let resolution = run_with_tokens(
+        MacroConnectEnabledFlag::Off,
+        vec![held(SourceKind::Pipedream, app_key("notion"))],
+    );
+
+    assert_eq!(
+        resolution.mcp.status(&app_key("notion")),
+        Status::NotConnected
+    );
+    assert!(resolution.api.is_empty());
+}
+
+#[test]
+fn token_app_macro_connect_on_connect_serves_it_counts_connect() {
+    let resolution = run_with_tokens(
+        MacroConnectEnabledFlag::On,
+        vec![
+            held(SourceKind::Token, app_key("linear")),
+            held(SourceKind::Connect, app_key("linear")),
+        ],
+    );
+
+    assert_eq!(
+        handle_name(&resolution, &app_key("linear")).as_deref(),
+        Some("Connect")
+    );
+    assert_eq!(resolution.mcp.resolved().len(), 1);
+}
+
+#[test]
+fn token_app_macro_connect_on_connect_does_not_serve_it_counts_the_token() {
+    let resolution = run_with_tokens(
+        MacroConnectEnabledFlag::On,
+        vec![
+            held(SourceKind::Token, app_key("notion")),
+            held(SourceKind::Connect, app_key("notion")),
+        ],
+    );
+
+    assert_eq!(resolution.mcp.status(&app_key("notion")), Status::Connected);
+    assert_eq!(resolution.mcp.resolved()[0].name, "Token");
+    assert_eq!(resolution.api.len(), 1);
+}
+
+#[test]
+fn token_app_is_never_a_server_added_by_url() {
+    assert!(can_count(SourceKind::Token, Sought::App(&app("notion"))));
+    assert!(!can_count(SourceKind::Token, Sought::Servers));
+    assert_eq!(
+        counted_source(
+            &app("notion"),
+            MacroConnectEnabledFlag::Off,
+            &token_overlays(),
+            &ConnectSupport::default(),
+        ),
+        SourceKind::Token
+    );
+    assert_eq!(
+        counted_source(
+            &app("asana"),
+            MacroConnectEnabledFlag::Off,
+            &token_overlays(),
+            &ConnectSupport::default(),
+        ),
+        SourceKind::Pipedream
     );
 }
 

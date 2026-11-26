@@ -6,7 +6,8 @@ Part of agent sessions / AI tooling. Owns Macro's integrations: the apps and
 MCP servers a user connects, which connection counts for each app, and how
 chat, agents, the sandbox proxy, imports, Granola sync and the web reach them.
 No other crate can name a source (native servers, the GitHub account link,
-Pipedream, Macro Connect) or tell which one holds a connection.
+Pipedream, Macro Connect, instance tokens) or tell which one holds a
+connection.
 
 ## Start here
 
@@ -20,7 +21,8 @@ Pipedream, Macro Connect) or tell which one holds a connection.
 - `src/domain/resolve.rs`: the pure function that applies the rules (which
   source counts per app and flag, disabled is not connected, one answer per
   app, `slack_v2` is `slack`, a native row is an app only at its overlay URL,
-  API access from the counted connection, a failed flag read is off). Its
+  an app with an instance token counts that token, API access from the
+  counted connection, a failed flag read is off). Its
   tests are the rule table and the properties. Agent scope (rule 7) is
   `McpConnections::scoped`/`permit` in `domain/models.rs`;
   `permit_unconnected` permits an app in scope the user cannot use, which
@@ -40,8 +42,8 @@ Pipedream, Macro Connect) or tell which one holds a connection.
   are not an agent loop).
 - `src/outbound/`: one module per source, each one `Source`
   (`domain/ports.rs`): `native/`, `github_link.rs`, `pipedream/`,
-  `macro_connect/`; `hosted_connections.rs` is the table Pipedream and Connect
-  share, each bound to its own `provider`.
+  `macro_connect/`, `token_source.rs`; `hosted_connections.rs` is the table
+  Pipedream and Connect share, each bound to its own `provider`.
 
 ## Boundaries
 
@@ -59,7 +61,9 @@ Pipedream, Macro Connect) or tell which one holds a connection.
 - Add a source: a module under `src/outbound/` implementing `Source` (and
   `McpConnection`/`ApiConnection` for what it provides), a `SourceKind`,
   its column in `resolve.rs`'s table with rule tests first, then
-  `composition.rs`.
+  `composition.rs`. A source that serves a fixed set of apps (the token
+  source) is told to the rules through `Overlays`, which `Connectors::new`
+  adds to every read of the overlay table.
 - Give consumers something new: a method on one of the three traits, served
   from `resolve`'s answer; never a new public path to a source.
 
@@ -90,6 +94,14 @@ Pipedream, Macro Connect) or tell which one holds a connection.
   one whose row shows a dead grant (a sign-in that never finished, an expired
   token with no refresh token) needs reauth, as the proxy would refuse it.
   A refresh token the server revoked is found only when dialing.
+- The token source (`LINEAR_API_KEY`, `NOTION_API_TOKEN`, optional) is for
+  installations with no Pipedream: the Linear and Notion importers read those
+  vendors' REST APIs (Jira has no token app yet) through an `ApiConnection`, which only Pipedream and
+  Connect provided. One token is the connection of every user, so the importer
+  reads with that token's access, not the user's. It has no MCP, no per-user
+  row and no holders, refuses connect, rename, disable and remove, and sends
+  the token only to the vendor's own origin (no redirects, no trace context).
+  A token app's Pipedream connection is ignored, as an overlaid app's is.
 
 ## Related
 

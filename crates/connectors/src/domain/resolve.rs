@@ -4,6 +4,7 @@
 //! | App | Flag off | Flag on, Connect serves it | Flag on, Connect does not |
 //! |---|---|---|---|
 //! | GitHub | the account link | Connect | the account link |
+//! | An app with an instance token | the token | Connect | the token |
 //! | An overlaid app | native | Connect | native |
 //! | Any other catalog app | Pipedream | Connect | Pipedream |
 //! | A server added by URL | its own row | its own row | its own row |
@@ -172,6 +173,8 @@ pub(crate) fn counted_source(
 
     if *app == ConnectorId::github() {
         SourceKind::GithubLink
+    } else if overlays.is_token_app(app) {
+        SourceKind::Token
     } else if overlays.is_overlaid(app) {
         SourceKind::Native
     } else {
@@ -185,10 +188,14 @@ pub(crate) fn can_count(source: SourceKind, sought: Sought<'_>) -> bool {
     match (source, sought) {
         (SourceKind::Native, _) => true,
         (SourceKind::GithubLink, Sought::App(app)) => *app == ConnectorId::github(),
-        (SourceKind::Pipedream | SourceKind::Connect, Sought::App(_)) => true,
-        (SourceKind::GithubLink | SourceKind::Pipedream | SourceKind::Connect, Sought::Servers) => {
-            false
-        }
+        (SourceKind::Pipedream | SourceKind::Connect | SourceKind::Token, Sought::App(_)) => true,
+        (
+            SourceKind::GithubLink
+            | SourceKind::Pipedream
+            | SourceKind::Connect
+            | SourceKind::Token,
+            Sought::Servers,
+        ) => false,
     }
 }
 
@@ -219,11 +226,11 @@ fn rank(status: Status) -> u8 {
 }
 
 /// Whether `source` provides an API for `app` (rule 6): Pipedream for every
-/// app, Connect where its catalog lists API access, native servers and the
-/// GitHub link never.
+/// app, an instance token for the apps it was given for, Connect where its
+/// catalog lists API access, native servers and the GitHub link never.
 fn source_provides_api(source: SourceKind, app: &ConnectorId, connect: &ConnectSupport) -> bool {
     match source {
-        SourceKind::Pipedream => true,
+        SourceKind::Pipedream | SourceKind::Token => true,
         SourceKind::Connect => connect.surfaces(app).is_some_and(|surfaces| surfaces.api()),
         SourceKind::Native | SourceKind::GithubLink => false,
     }

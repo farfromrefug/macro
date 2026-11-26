@@ -26,6 +26,9 @@ pub(crate) enum SourceKind {
     Pipedream,
     /// Macro Connect (`pipedream_mcp_connections`, provider `connect`).
     Connect,
+    /// A vendor token the operator configured for the whole instance, in the
+    /// process's environment: REST API access for every user, no MCP.
+    Token,
 }
 
 /// One connection a source holds for a user, with what it provides.

@@ -293,7 +293,7 @@ proptest! {
             let Some(app) = app_of(handle.key()) else { continue };
             let input = mcp_input(&connections, handle);
             let source_has_api = match designated(macro_connect_enabled, &connect, app) {
-                SourceKind::Pipedream => true,
+                SourceKind::Pipedream | SourceKind::Token => true,
                 SourceKind::Connect => connect.surfaces(app).is_some_and(|surfaces| surfaces.api()),
                 SourceKind::Native | SourceKind::GithubLink => false,
             };

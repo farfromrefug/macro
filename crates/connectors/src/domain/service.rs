@@ -177,10 +177,21 @@ trait ReadOverlays: Send + Sync {
     async fn read(&self) -> Result<Overlays, rootcause::Report>;
 }
 
+/// The overlay table with the apps of the instance token source added, so
+/// every read of the routing table sees both.
+struct TokenRouted<O> {
+    overlays: O,
+    token_apps: HashSet<ConnectorId>,
+}
+
 #[async_trait::async_trait]
-impl<O: OverlayCatalog> ReadOverlays for O {
+impl<O: OverlayCatalog> ReadOverlays for TokenRouted<O> {
     async fn read(&self) -> Result<Overlays, rootcause::Report> {
-        self.overlays().await
+        Ok(self
+            .overlays
+            .overlays()
+            .await?
+            .with_token_apps(&self.token_apps))
     }
 }
 
@@ -245,13 +256,17 @@ impl Connectors {
         servers: Option<Arc<dyn ServerDirectory>>,
         macro_connect_enabled: impl MacroConnectEnabledFlagReader,
         overlays: impl OverlayCatalog,
+        token_apps: HashSet<ConnectorId>,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 sources,
                 servers,
                 macro_connect_enabled: Box::new(macro_connect_enabled),
-                overlays: Box::new(overlays),
+                overlays: Box::new(TokenRouted {
+                    overlays,
+                    token_apps,
+                }),
             }),
         }
     }
@@ -527,6 +542,7 @@ impl Connectors {
                 let surfaces = match counted {
                     SourceKind::Connect => snapshot.connect.surfaces(app).unwrap_or_default(),
                     SourceKind::Pipedream => Surfaces::new(true, true),
+                    SourceKind::Token => Surfaces::new(false, true),
                     SourceKind::Native | SourceKind::GithubLink => Surfaces::new(true, false),
                 };
                 listed.insert(

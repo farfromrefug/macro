@@ -25,6 +25,7 @@ use crate::outbound::native::source::NativeSource;
 use crate::outbound::overlays::PgOverlayCatalog;
 use crate::outbound::pipedream::api::PipedreamClient;
 use crate::outbound::pipedream::source::PipedreamSource;
+use crate::outbound::token_source::TokenSource;
 use authentication_service_client::AuthServiceClient;
 use feature_flags::outbound::posthog::PostHogFeatureFlags;
 use macro_env::Environment;
@@ -48,6 +49,7 @@ pub use crate::outbound::pipedream::api::{
     DEFAULT_API_URL as PIPEDREAM_DEFAULT_API_URL, DEFAULT_MCP_URL as PIPEDREAM_DEFAULT_MCP_URL,
     PipedreamConfig,
 };
+pub use crate::outbound::token_source::TokenAppConfig;
 
 /// How long one read of the rollout flag may take before it counts as off.
 const FLAG_READ_TIMEOUT: Duration = Duration::from_secs(3);
@@ -71,6 +73,10 @@ pub struct ConnectorsConfig {
     pub pipedream: Option<PipedreamSettings>,
     /// Macro Connect, when this process has its key.
     pub connect: Option<ConnectConfig>,
+    /// Vendor tokens the operator configured for the whole instance. Each
+    /// is every user's REST API connection to its app, for installations
+    /// with no hosted broker; empty for none.
+    pub token_apps: Vec<TokenAppConfig>,
     /// The flag provider, when this process has its key. Without one,
     /// nobody is on Macro Connect.
     pub feature_flags: Option<FeatureFlagsConfig>,
@@ -116,7 +122,8 @@ pub struct Composed {
 /// for.
 ///
 /// Native servers and the GitHub link are always on; Pipedream and Macro
-/// Connect only with their credentials.
+/// Connect only with their credentials, and the instance token source only
+/// with a token.
 pub fn build(
     config: ConnectorsConfig,
     pool: PgPool,
@@ -200,6 +207,11 @@ pub fn compose(
             pipedream_grants,
         )));
     }
+    let token_source = TokenSource::new(config.token_apps)?;
+    let token_apps = token_source.apps();
+    if !token_apps.is_empty() {
+        sources.push(Arc::new(token_source));
+    }
 
     let flags = config
         .feature_flags
@@ -224,6 +236,7 @@ pub fn compose(
         Some(native as Arc<dyn ServerDirectory>),
         CachedMacroConnectEnabledFlag::new(flags),
         overlays.clone(),
+        token_apps,
     );
 
     Ok(Composed {

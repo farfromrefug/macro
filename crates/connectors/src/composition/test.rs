@@ -30,6 +30,7 @@ fn setup() -> (ConnectorsConfig, Arc<redis::Client>, AuthServiceClient) {
         mcp_pre_registered: PreRegisteredProviders::empty(),
         pipedream: None,
         connect: None,
+        token_apps: Vec::new(),
         feature_flags: None,
     };
     let redis = Arc::new(redis::Client::open("redis://127.0.0.1:9").unwrap());
@@ -111,4 +112,38 @@ async fn the_routes_get_a_catalog_and_sign_ins_over_the_same_services(pool: PgPo
         )
         .await
         .unwrap();
+}
+
+#[sqlx::test(
+    migrator = "MACRO_DB_MIGRATIONS",
+    fixtures(path = "../../fixtures", scripts("users"))
+)]
+async fn an_instance_token_is_every_users_api_connection_to_its_app(pool: PgPool) {
+    use crate::domain::models::{ConnectorId, Surfaces};
+
+    let (mut config, redis, auth_service) = setup();
+    config.token_apps = vec![TokenAppConfig::notion("ntn_secret")];
+    let connectors = build(config, pool, redis, auth_service).unwrap();
+    let owner = MacroUserIdStr::parse_from_str(OWNER).unwrap();
+    let notion = ConnectorId::parse("notion").unwrap();
+
+    let connections = connectors.connections(&owner).await.unwrap();
+    assert_eq!(
+        connections.status(&ConnectorKey::App(notion.clone())),
+        Status::Connected
+    );
+    // An API only: no MCP tools to hand out.
+    assert_eq!(connections.handles().count(), 0);
+    assert_eq!(
+        connections.resolved()[0].surfaces,
+        Surfaces::new(false, true)
+    );
+
+    // The operator owns the token: a user cannot connect over it.
+    assert!(
+        connectors
+            .start_connect(&owner, &ConnectorKey::App(notion))
+            .await
+            .is_err()
+    );
 }

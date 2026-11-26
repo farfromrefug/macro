@@ -97,7 +97,7 @@ impl World {
             SourceKind::GithubLink => {
                 HashMap::from([(ConnectorId::github(), Surfaces::new(true, false))])
             }
-            SourceKind::Native => HashMap::new(),
+            SourceKind::Native | SourceKind::Token => HashMap::new(),
         };
 
         FakeSource {
@@ -137,6 +137,7 @@ impl World {
             Some(Arc::new(self.source(SourceKind::Native))),
             FakeMacroConnectEnabledFlag(self.flags.clone()),
             FakeOverlays(Self::overlays()),
+            HashSet::new(),
         )
     }
 

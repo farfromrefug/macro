@@ -3,7 +3,7 @@
 //! serves.
 
 use crate::domain::models::{ConnectorId, ServerUrl, Surfaces};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 #[cfg(test)]
 mod test;
@@ -33,7 +33,9 @@ pub(crate) fn slugs_of(app: &ConnectorId) -> Vec<&str> {
     std::iter::once(app.as_str()).chain(aliases).collect()
 }
 
-/// Catalog apps served by the vendor's own MCP server (`mcp_overlays`).
+/// The routing table of apps that do not use the default source (Pipedream):
+/// catalog apps served by the vendor's own MCP server (`mcp_overlays`), and
+/// the apps the operator gave an instance token.
 ///
 /// Addresses are not unique: several slugs can name one server, and a user's
 /// one row at that server stands for every app there.
@@ -41,6 +43,7 @@ pub(crate) fn slugs_of(app: &ConnectorId) -> Vec<&str> {
 pub(crate) struct Overlays {
     servers: HashMap<ConnectorId, ServerUrl>,
     apps: HashMap<ServerUrl, BTreeSet<ConnectorId>>,
+    token_apps: HashSet<ConnectorId>,
 }
 
 impl Overlays {
@@ -53,7 +56,23 @@ impl Overlays {
             servers.insert(app, url);
         }
 
-        Self { servers, apps }
+        Self {
+            servers,
+            apps,
+            token_apps: HashSet::new(),
+        }
+    }
+
+    /// These routes, plus `token_apps`: the apps the instance token source
+    /// serves.
+    pub(crate) fn with_token_apps(mut self, token_apps: &HashSet<ConnectorId>) -> Self {
+        self.token_apps.clone_from(token_apps);
+        self
+    }
+
+    /// Whether the instance token source serves `app`.
+    pub(crate) fn is_token_app(&self, app: &ConnectorId) -> bool {
+        self.token_apps.contains(app)
     }
 
     /// Whether `app` is overlaid.

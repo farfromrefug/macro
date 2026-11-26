@@ -19,3 +19,6 @@ pub(crate) mod native;
 pub(crate) mod overlays;
 /// Pipedream as a source of connections.
 pub(crate) mod pipedream;
+/// Vendor tokens the operator configured for the instance, as a source of
+/// connections.
+pub(crate) mod token_source;
