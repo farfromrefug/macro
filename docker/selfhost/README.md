@@ -182,8 +182,17 @@ files in them.
 ## Limitations
 
 - **AI features** (chat, the assistant, agent sessions) call model providers.
-  The services start with placeholder keys; set `ANTHROPIC_API_KEY`,
-  `OPENAI_API_KEY` or `GOOGLE_GENERATIVE_AI_API_KEY` in `.env` to use them. Agent
+  The services start with placeholder keys, so until you configure one every
+  chat request fails with a 401. Set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or
+  `GOOGLE_GENERATIVE_AI_API_KEY` in `.env`, or run a model yourself: point
+  `LOCAL_LLM_BASE_URL` at any OpenAI-compatible server (Ollama, `mlx_lm.server`,
+  LM Studio, llama.cpp, vLLM) and set `LOCAL_LLM_MODEL` to make it serve every
+  model request. `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` point Claude or GPT at
+  a compatible gateway instead. Caveats of a local model: the agent needs a model
+  with tool calling, small models struggle with the assistant's long prompts, it
+  receives no extended-thinking settings, and its usage is not metered.
+  Features that call other providers (embeddings, search, web search) are
+  unaffected by it. Agent
   sandboxes for the coder bot (`Code` mode) are not available: they need a Docker
   socket or a Daytona account, and this stack mounts neither. AI document editing
   needs the AI editing worker, which is not included.

@@ -234,6 +234,14 @@ x-macro-env: &macro-env
   # otherwise read those APIs through Pipedream. Blank = off.
   LINEAR_API_KEY: ${LINEAR_API_KEY:-}
   NOTION_API_TOKEN: ${NOTION_API_TOKEN:-}
+  # A model server on this machine or network (Ollama, mlx_lm.server, LM
+  # Studio...), and gateways for Claude and GPT. Blank = the providers' own
+  # hosts. With LOCAL_LLM_MODEL set, every model request is served by it.
+  LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+  LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+  LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+  OVERRIDE_ANTHROPIC_API_URL: ${ANTHROPIC_BASE_URL:-}
+  OVERRIDE_OPENAI_API_URL: ${OPENAI_BASE_URL:-}
   SLACK_MCP_CLIENT_ID: local-slack-mcp-client
   SLACK_MCP_CLIENT_SECRET: local-slack-mcp-secret
   # Video calls. These point at the `livekit` service when the `calls` profile
@@ -266,6 +274,10 @@ x-service: &service
   image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-services:${MACRO_VERSION:-latest}
   restart: unless-stopped
   environment: *macro-env
+  # Lets the services reach a model server on the Docker host by name, as
+  # Docker Desktop and OrbStack already do; Linux needs the mapping.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
   logging:
     driver: json-file
     options:
