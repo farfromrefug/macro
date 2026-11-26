@@ -852,6 +852,22 @@ async fn completing_through_connect_replaces_the_pipedream_row() {
 }
 
 #[tokio::test]
+async fn a_connection_the_rules_ignore_is_not_a_finished_sign_in() {
+    // Stripe is overlaid, so its Pipedream row does not count and lists as
+    // not connected. Polling for the native sign-in must not take it for the
+    // sign-in finishing.
+    let world = World::new().holding(row(SourceKind::Pipedream, app_key("stripe")));
+
+    let unfinished = world
+        .connectors()
+        .complete_connect(&user(), &app("stripe"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(unfinished, ConnectorsError::NotFound(_)));
+}
+
+#[tokio::test]
 async fn an_agent_may_add_only_public_https_servers() {
     let connectors = World::new().connectors();
 

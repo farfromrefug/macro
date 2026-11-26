@@ -793,9 +793,14 @@ impl ConnectionManagementService for Connectors {
         // counts, so the answer does not wait on it.
         let key = ConnectorKey::App(app.clone());
         let snapshot = self.snapshot(user, SourceOutage::Skip).await?;
+        // A row shown as not connected is a connection another source holds
+        // that does not count (an instance token), not this sign-in: it has
+        // not finished, so the caller polls again.
         Self::listing(user, &snapshot)
             .into_iter()
-            .find(|connector| *connector.key() == key)
+            .find(|connector| {
+                *connector.key() == key && connector.status() != Status::NotConnected
+            })
             .ok_or(ConnectorsError::NotFound(key))
     }
 
