@@ -230,6 +230,10 @@ x-macro-env: &macro-env
   PIPEDREAM_CLIENT_ID: ${PIPEDREAM_CLIENT_ID:-}
   PIPEDREAM_CLIENT_SECRET: ${PIPEDREAM_CLIENT_SECRET:-}
   PIPEDREAM_PROJECT_ID: ${PIPEDREAM_PROJECT_ID:-}
+  # Instance-wide vendor tokens for the Linear and Notion importers, which
+  # otherwise read those APIs through Pipedream. Blank = off.
+  LINEAR_API_KEY: ${LINEAR_API_KEY:-}
+  NOTION_API_TOKEN: ${NOTION_API_TOKEN:-}
   SLACK_MCP_CLIENT_ID: local-slack-mcp-client
   SLACK_MCP_CLIENT_SECRET: local-slack-mcp-secret
   # Video calls. These point at the `livekit` service when the `calls` profile

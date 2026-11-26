@@ -190,8 +190,11 @@ files in them.
 - **Connectors** (the catalog of hundreds of apps) are served by Pipedream, a hosted
   third-party broker, so they are off by default (`PIPEDREAM_*` blank). Servers
   added by URL and vendors that run their own MCP server connect directly with
-  Macro's own OAuth client, with no broker. Linear, Notion and Jira *imports*
-  read the vendor API through the broker and do not work without it yet.
+  Macro's own OAuth client, with no broker. The Linear and Notion *importers*
+  read those vendors' APIs, so without Pipedream give them tokens:
+  `LINEAR_API_KEY` and `NOTION_API_TOKEN` in `.env`. Each token is one for the
+  whole instance: every user counts as connected, and an import reads with that
+  token's access, not the user's. Jira has no token option yet.
 - **Gmail and Outlook** need real OAuth clients. Set `GOOGLE_CLIENT_ID` and
   `GOOGLE_CLIENT_SECRET` **before the first `up`**: they are written into
   FusionAuth's identity provider on its first boot. Until then "Continue with
