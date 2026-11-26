@@ -78,6 +78,7 @@ jobs:
             {"image":"macro-web","dockerfile":"docker/Dockerfile.selfhost-web","context":"."},
             {"image":"macro-sync-service","dockerfile":"docker/sync-service.Dockerfile","context":"."},
             {"image":"macro-lexical-service","dockerfile":"docker/Dockerfile.selfhost-lexical","context":"."},
+            {"image":"macro-ai-editing-worker","dockerfile":"docker/Dockerfile.selfhost-ai-editing","context":"."},
             {"image":"macro-websocket-service","dockerfile":"docker/Dockerfile.selfhost-websocket","context":"."},
             {"image":"macro-opensearch","dockerfile":"infra/local/opensearch/Dockerfile","context":"infra/local/opensearch"}
           ]'

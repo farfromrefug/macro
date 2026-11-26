@@ -750,6 +750,28 @@ services:
       retries: 10
       start_period: 60s
 
+  ai-editing-worker:
+    # Reads a document's markdown for the backend, and runs AI edits. Chat and
+    # agents cannot read documents without it. A Cloudflare Worker on workerd.
+    image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-ai-editing-worker:${MACRO_VERSION:-latest}
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.selfhost-ai-editing
+    restart: unless-stopped
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-local-openai-key}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-local-anthropic-key}
+      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-local-cerebras-key}
+    depends_on:
+      sync-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8933/').then(() => process.exit(0)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
   lexical-service:
     image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-lexical-service:${MACRO_VERSION:-latest}
     build:

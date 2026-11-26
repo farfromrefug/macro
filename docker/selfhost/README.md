@@ -26,6 +26,7 @@ for what self-hosting involves.
 | `proxy` | `macro-web` | Caddy. Serves the web app at `/app` and routes every backend path, so the browser sees one origin. |
 | `authentication-service`, `connection-gateway`, `contacts-service`, `document-storage-service`, `email-service`, `email-pubsub-workers`, `calendar-service`, `notification-service`, `search-processing-service`, `static-file-service`, `unfurl-service`, `image-proxy-service`, `document-upload-finalizer`, `agent-harness-service` | `macro-services` | The Rust backend. One image holds every binary; each service picks its own with `command:`. The app calls the agent harness (assistant, connectors, scheduled actions) on every page load, so it is not optional. |
 | `sync-service` | `macro-sync-service` | Real-time document sync (a Cloudflare Worker, run on workerd). |
+| `ai-editing-worker` | `macro-ai-editing-worker` | Reads a document's markdown for the backend and runs AI edits (a Cloudflare Worker, run on workerd). Without it chat and agents cannot read documents. |
 | `lexical-service` | `macro-lexical-service` | Document rendering for the sync service and search. |
 | `websocket-service` | `macro-websocket-service` | A small WebSocket endpoint the app connects to at `/websocket`. |
 | `fusionauth`, `fusionauth-db` | `fusionauth/fusionauth-app` | Identity and passwordless sign-in. |
@@ -35,7 +36,7 @@ for what self-hosting involves.
 | `migrate`, `create-indices`, `kafka-topics`, `fusionauth-kickstart` | `macro-bootstrap` and stock images | One-shot setup. All are idempotent and run on every `up`. |
 
 This is the service set `just run_local` runs, **minus** the WhatsApp and
-Slack-import workers, the AI editing worker, the analytics proxy, OpenBao (the
+Slack-import workers, the analytics proxy, OpenBao (the
 Passwords vault) and the Gmail, Outlook and model emulators. See
 [Limitations](#limitations).
 
