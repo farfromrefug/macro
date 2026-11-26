@@ -6,7 +6,7 @@ use anyhow::Context;
 use connectors::composition::{
     AesKey, ConnectConfig, ConnectorsConfig, FeatureFlagsConfig, OAuthClientMetadata,
     PIPEDREAM_DEFAULT_API_URL, PIPEDREAM_DEFAULT_MCP_URL, PipedreamConfig, PipedreamSettings,
-    PreRegisteredProviders,
+    PreRegisteredProviders, TokenAppConfig,
 };
 use macro_env::Environment;
 use macro_env_var::maybe_env_var;
@@ -31,6 +31,13 @@ maybe_env_var! {
         PipedreamMcpUrl,
         /// Macro's customer key for the Macro Connect API.
         ConnectCustomerKey,
+        /// A Linear API key or access token for the whole instance, for
+        /// installations with no hosted broker. Optional: no Doppler key or
+        /// `BootStubEnv` placeholder is needed, and blank means off.
+        LinearApiKey,
+        /// A Notion internal integration token for the whole instance; as
+        /// `LINEAR_API_KEY`, optional.
+        NotionApiToken,
         /// PostHog project token.
         PosthogApiKey,
         /// Regional PostHog origin; defaults to the US origin.
@@ -97,6 +104,10 @@ pub async fn connectors_config_from_env(
         mcp_pre_registered: pre_registered_providers(),
         pipedream,
         connect: connect_config(value!(connect_customer_key).as_deref())?,
+        token_apps: token_apps(
+            value!(linear_api_key).as_deref(),
+            value!(notion_api_token).as_deref(),
+        ),
         feature_flags: feature_flags_config(
             value!(posthog_api_key).as_deref(),
             value!(posthog_host).as_deref(),
@@ -155,6 +166,18 @@ pub fn pipedream_settings(
         },
         webhook_uri,
     })
+}
+
+/// The instance tokens for the apps with a value; blank values are unset.
+pub fn token_apps(linear: Option<&str>, notion: Option<&str>) -> Vec<TokenAppConfig> {
+    [
+        linear.map(TokenAppConfig::linear),
+        notion.map(TokenAppConfig::notion),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(TokenAppConfig::is_set)
+    .collect()
 }
 
 /// Macro Connect for `customer_key`, or `None` without a key (Connect off).

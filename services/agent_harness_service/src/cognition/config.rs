@@ -64,6 +64,13 @@ maybe_env_vars!(
     /// unauthenticated because Pipedream is the caller. When unset, the
     /// webhook route is not mounted.
     pub struct PipedreamWebhookSecret;
+    /// A Linear API key or access token for the whole instance, for
+    /// installations with no hosted broker. Optional (no Doppler key or
+    /// `BootStubEnv` placeholder); blank means off.
+    pub struct LinearApiKey;
+    /// A Notion internal integration token for the whole instance; as
+    /// `LINEAR_API_KEY`, optional.
+    pub struct NotionApiToken;
     /// PostHog project token. When unset, integration analytics are not sent.
     pub struct PosthogApiKey;
     /// PostHog ingestion origin. Falls back to the US origin when unset.
@@ -158,6 +165,10 @@ pub struct Config {
     /// Customer key for Macro Connect, which serves the apps it has in its
     /// catalog to users in the Connect rollout.
     pub connect_customer_key: ConnectCustomerKey,
+    /// A Linear API key or access token every user's Linear connection uses.
+    pub linear_api_key: LinearApiKey,
+    /// A Notion integration token every user's Notion connection uses.
+    pub notion_api_token: NotionApiToken,
     /// The internal api key
     pub internal_api_key: InternalApiKey,
     /// AI editing worker URL
@@ -234,6 +245,10 @@ impl Config {
             connect: ai_tools::connectors_config::connect_config(
                 self.connect_customer_key.value(),
             )?,
+            token_apps: ai_tools::connectors_config::token_apps(
+                self.linear_api_key.value(),
+                self.notion_api_token.value(),
+            ),
             feature_flags: ai_tools::connectors_config::feature_flags_config(
                 self.posthog_api_key.value(),
                 self.posthog_host.value(),
@@ -344,6 +359,8 @@ impl Config {
             posthog_api_key: PosthogApiKey::Unset,
             posthog_host: PosthogHost::Unset,
             connect_customer_key: ConnectCustomerKey::Unset,
+            linear_api_key: LinearApiKey::Unset,
+            notion_api_token: NotionApiToken::Unset,
             internal_api_key: InternalApiKey::Comptime(""),
             ai_editing_worker_url: AiEditingWorkerUrl::unwrap_new().to_string(),
             document_permission_jwt: DocumentPermissionJwt::Comptime("DOCUMENT_PERMISSION_JWT"),
