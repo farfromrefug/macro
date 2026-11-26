@@ -84,7 +84,7 @@ x-macro-env: &macro-env
   OVERRIDE_MCP_SERVICE_URL: http://agent-harness-service:8080
   OVERRIDE_PREVIEW_GATEWAY_URL: http://agent-harness-service:8080/preview
   OVERRIDE_SCHEDULED_ACTION_SERVICE_URL: http://agent-harness-service:8080/scheduled-action
-  EXTERNAL_EGRESS_BASE_URL: http://agent-harness-service:8102
+  EXTERNAL_EGRESS_BASE_URL: http://127.0.0.1:${EGRESS_PORT:-8102}
 
   # Shared secrets (generated into .env by setup.sh).
   INTERNAL_API_SECRET_KEY: ${INTERNAL_API_SECRET_KEY}
@@ -684,6 +684,11 @@ services:
     # app calls it on every page load, so the app does not work without it.
     <<: *service
     command: ["/app/out/agent_harness_service"]
+    ports:
+      # The egress proxy, for macrod and other runtimes on this machine: the URL
+      # the harness gives them (EXTERNAL_EGRESS_BASE_URL) must resolve outside
+      # the compose network.
+      - "127.0.0.1:${EGRESS_PORT:-8102}:8102"
     volumes:
       - agent_git_repos:/data/agent-git
     depends_on:
