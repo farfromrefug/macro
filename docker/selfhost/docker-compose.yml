@@ -819,7 +819,10 @@ services:
       TLS_MODE: ${TLS_MODE:-internal}
     ports:
       - "${PROXY_PORT:-8090}:${PROXY_PORT:-8090}"
+      # macrod (plain HTTP, this machine only; see the Caddyfile)
+      - "127.0.0.1:${MACROD_PORT:-8091}:8091"
     volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

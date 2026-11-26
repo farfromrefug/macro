@@ -134,3 +134,19 @@
 		respond "not found" 404
 	}
 }
+
+# Plain HTTP on loopback for macrod (the local agent daemon), which cannot trust
+# Caddy's internal CA on every platform: macOS uses the system keychain. Only the
+# two services macrod talks to are routed here, and compose publishes the port on
+# 127.0.0.1 only. Use https://<host> instead for a machine that is not this one.
+http://:8091 {
+	handle_path /dss/* {
+		reverse_proxy document-storage-service:8080
+	}
+	handle_path /agent-harness/* {
+		reverse_proxy agent-harness-service:8080
+	}
+	handle {
+		respond "not found" 404
+	}
+}

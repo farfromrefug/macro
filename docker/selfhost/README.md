@@ -97,6 +97,22 @@ browser, or accept the warning:
 docker compose cp proxy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
 ```
 
+### Local agents (macrod)
+
+`macrod` pairs a machine's coding agents with your instance. Its HTTP client may not
+accept Caddy's internal certificate (macOS uses the system keychain), so compose also
+publishes a plain-HTTP listener on **127.0.0.1:8091**, routed to the harness and
+storage services only. In `~/.macrod/macrod.toml`:
+
+```toml
+[macro]
+api_url = "http://127.0.0.1:8091/agent-harness"
+storage_url = "http://127.0.0.1:8091/dss"
+web_url = "https://localhost:8090/app"   # your PUBLIC_ORIGIN + /app
+```
+
+For another machine, use `https://<your host>` with a real certificate instead.
+
 ### Video calls
 
 Calls use a LiveKit server, which is optional because it needs UDP ports:
