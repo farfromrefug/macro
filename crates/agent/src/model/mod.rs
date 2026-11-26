@@ -11,6 +11,7 @@ pub use speed::*;
 pub(crate) mod anthropic;
 pub mod anthropic_prompt_layout;
 mod gemini;
+pub mod local;
 pub mod metering;
 pub mod metering_http;
 mod openai;

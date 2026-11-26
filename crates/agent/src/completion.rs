@@ -146,6 +146,9 @@ pub async fn complete_with_history_and_params<M: ToString>(
                 .await?
             }
             RoutedModel::OpenAiChatCompletions(m) => {
+                // A local server may reject provider-specific parameters.
+                let additional_params = additional_params
+                    .filter(|_| m.model().provider() != crate::model::local::LOCAL_PROVIDER);
                 prompt_with_history(
                     TracedModel::new(m.completion(), telemetry.clone()),
                     system_prompt,

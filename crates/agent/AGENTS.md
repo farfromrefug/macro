@@ -12,9 +12,12 @@ and usage metering.
 - `src/agent_loop.rs`: `AgentLoop`/`Session` — runs a turn, dispatches tool
   calls, loops until a final response.
 - `src/model/`: provider adapters (`anthropic.rs`, `openai.rs`, `gemini.rs`)
-  behind `model/router.rs` (the Gemini client's host is
-  `macro_service_urls`' `GoogleGenerativeAiApiUrl`, so a local stack can
-  point it at `crates/model_emulator`), plus `predefined_model.rs`/`speed.rs` (the
+  behind `model/router.rs` (the Anthropic, OpenAI and Gemini clients' hosts
+  are `macro_service_urls`' `AnthropicApiUrl`, `OpenaiApiUrl` and
+  `GoogleGenerativeAiApiUrl`, so a local stack can point Gemini at
+  `crates/model_emulator` and a self-host can point Claude or GPT at a
+  compatible gateway), `model/local.rs` (the operator's own model server,
+  below), plus `predefined_model.rs`/`speed.rs` (the
   product-facing model/speed vocabulary) and `metering.rs` (usage recording
   hook into `ai_usage`).
 - `AgentLoop::with_streamed_tool_calls` opts hosts into early tool-call
@@ -85,6 +88,28 @@ and usage metering.
   account is suspended or out of credit (`genai_telemetry::provider_account`),
   which pages on-call. A client rekeyed for an agent's own key is built
   `with_agent_api_key()` so its billing failures never do.
+
+- The `local` provider (`model/local.rs`) is an operator's own OpenAI-compatible
+  Chat Completions server (Ollama, `mlx_lm.server`, LM Studio, llama.cpp,
+  vLLM). `LOCAL_LLM_BASE_URL` (with `/v1`) registers it, so `local/<model>`
+  routes to it; optional `LOCAL_LLM_API_KEY` (a placeholder bearer is sent
+  without one). With `LOCAL_LLM_MODEL` too, `ModelRouter::route` (the one
+  place an id is resolved, also behind `route_or_default` and the fallback
+  model) rewrites every well-formed id, whatever its provider, to
+  `local/<LOCAL_LLM_MODEL>`: product tiers and background features then run
+  on it. A model without a base URL fails startup. All three are optional
+  process environment, so they need no Doppler key or `BootStubEnv` entry.
+  Gotchas: the local client is `MeteredHttpClient::unmetered()`, so its
+  requests skip admission, pricing and journaling even with billing on, and its
+  failures never page as a Macro account outage; nothing guards its address
+  (a LAN or `host.docker.internal` host is the point); requests to it carry no
+  Anthropic `thinking`/`temperature`, OpenAI `reasoning` or speed parameters
+  (`into_agent`, `complete_with_history`), because local servers may reject
+  unknown fields; tool calling, long system prompts and image tool results
+  depend on the model, since Chat Completions carries no tool images.
+- `AnthropicApiUrl`/`OpenaiApiUrl` (`OVERRIDE_ANTHROPIC_API_URL`,
+  `OVERRIDE_OPENAI_API_URL`) apply to the deployment's clients and to those
+  `with_provider_api_key` rebuilds.
 
 ## Related
 

@@ -269,3 +269,79 @@ fn luna_defaults_to_low_effort_like_the_mini_it_replaces() {
         "high"
     );
 }
+
+#[test]
+fn a_local_model_serves_every_provider_and_the_default() {
+    let router = test_router().serving_every_request_with("qwen3:30b");
+
+    for id in [
+        "anthropic/claude-opus-4-8",
+        "openai/gpt-5.5",
+        "local/llama-3.3-70b",
+        "fireworks/kimi-k3",
+    ] {
+        let routed = router.route(id).unwrap();
+        assert!(
+            matches!(routed, RoutedModel::OpenAiChatCompletions(_)),
+            "`{id}` should be served by the local server"
+        );
+        assert_eq!(routed.provider(), "local", "{id}");
+        assert_eq!(routed.model_name(), "qwen3:30b", "{id}");
+    }
+
+    // An unroutable id falls back to the local model, not to Claude.
+    let fallback = router.route_or_default("smart");
+    assert_eq!(fallback.provider(), "local");
+    assert_eq!(fallback.model_name(), "qwen3:30b");
+
+    // A malformed id is still malformed.
+    assert!(router.route("no-provider-segment").is_err());
+}
+
+#[test]
+fn without_a_local_model_routing_is_unchanged() {
+    let router = test_router();
+
+    assert!(matches!(
+        router.route("anthropic/claude-opus-4-8").unwrap(),
+        RoutedModel::Anthropic(_)
+    ));
+    assert!(matches!(
+        router.route("openai/gpt-5.5").unwrap(),
+        RoutedModel::OpenAiResponses(_)
+    ));
+    let local = router.route("local/qwen3:30b").unwrap();
+    assert_eq!(local.model_name(), "qwen3:30b");
+}
+
+#[test]
+fn the_local_provider_is_built_from_the_environment_values() {
+    use crate::model::local::LocalLlm;
+    use crate::model::metering_http::MeteredHttpClient;
+
+    let local = LocalLlm::from_values(
+        Some("http://host.docker.internal:11434/v1"),
+        None,
+        Some("qwen3:30b"),
+    )
+    .unwrap()
+    .unwrap();
+    let anthropic = anthropic::Client::builder()
+        .api_key("test-anthropic-key")
+        .http_client(AnthropicPromptLayout::new(MeteredHttpClient::default()))
+        .build()
+        .unwrap();
+    let openai = openai::Client::builder()
+        .api_key("test-openai-key")
+        .http_client(MeteredHttpClient::default())
+        .build()
+        .unwrap();
+
+    let router = ModelRouter::new(anthropic, openai)
+        .with_local_llm(&local)
+        .unwrap();
+
+    let routed = router.route("anthropic/claude-haiku-4-5").unwrap();
+    assert_eq!(routed.provider(), "local");
+    assert_eq!(routed.model_name(), "qwen3:30b");
+}

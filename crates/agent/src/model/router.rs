@@ -24,7 +24,7 @@ use ai_toolset::RequestContext;
 use ai_usage::{UsageContext, UsageRecorder};
 use futures::StreamExt;
 use macro_env_var::env_var;
-use macro_service_urls::GoogleGenerativeAiApiUrl;
+use macro_service_urls::{AnthropicApiUrl, GoogleGenerativeAiApiUrl, OpenaiApiUrl};
 use rig_agent::agent::{Agent, AgentBuilder, MultiTurnStreamItem};
 use rig_agent::streaming::StreamingPrompt;
 use rig_agent::tool::server::ToolServerHandle;
@@ -38,6 +38,7 @@ use tracing::Instrument as _;
 use super::anthropic::{AnthropicModel, DeferredTools, LaidOutModel, SessionLayout};
 use super::anthropic_prompt_layout::AnthropicPromptLayout;
 use super::gemini::{GeminiCompletionModel, GeminiModel};
+use super::local::{LOCAL_PROVIDER, LocalLlm};
 use super::metering::{MeteringContext, WireProtocol};
 use super::metering_http::MeteredHttpClient;
 use super::openai::{CompatibleCompletionModel, OpenAiChatCompletionsModel, OpenAiResponsesModel};
@@ -201,11 +202,16 @@ impl<'a, H: HttpClientExt + Clone + Default + std::fmt::Debug + 'static> RoutedM
                 ))
             }
             RoutedModel::OpenAiChatCompletions(m) => {
-                let mut params = m
-                    .thinking_params(reasoning_effort)
-                    .unwrap_or_else(|| serde_json::json!({}));
-                speed.apply(&m.model().to_string(), &mut params);
-                let thinking = Some(params);
+                // A local server gets no provider-specific parameters: it may
+                // reject fields it does not know, and a rewritten model was
+                // asked for with another provider's settings.
+                let thinking = (m.model().provider() != LOCAL_PROVIDER).then(|| {
+                    let mut params = m
+                        .thinking_params(reasoning_effort)
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    speed.apply(&m.model().to_string(), &mut params);
+                    params
+                });
                 ProviderAgent::OpenAiChatCompletions(build_agent(
                     m.completion(),
                     thinking,
@@ -389,6 +395,9 @@ pub struct ModelRouter<H = ReqwestClient> {
     openai: Arc<openai::Client<H>>,
     gemini: Option<Arc<gemini::Client<H>>>,
     openai_compatible: HashMap<String, Arc<openai::CompletionsClient<H>>>,
+    /// The model that serves every request when a local server replaces the
+    /// hosted providers; see [`ModelRouter::with_local_llm`].
+    local_model: Option<Arc<str>>,
 }
 
 impl<H: HttpClientExt + Clone + 'static> ModelRouter<H> {
@@ -404,6 +413,7 @@ impl<H: HttpClientExt + Clone + 'static> ModelRouter<H> {
             openai: Arc::new(openai),
             gemini: None,
             openai_compatible: HashMap::new(),
+            local_model: None,
         }
     }
 }
@@ -412,7 +422,9 @@ impl ModelRouter {
     /// Build a router with the built-in providers from the environment.
     ///
     /// Requires `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CEREBRAS_API_KEY`,
-    /// `FIREWORK_API_KEY`, and `GOOGLE_GENERATIVE_AI_API_KEY`. Chain
+    /// `FIREWORK_API_KEY`, and `GOOGLE_GENERATIVE_AI_API_KEY`. Optionally
+    /// reads `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_API_KEY` and `LOCAL_LLM_MODEL`
+    /// (see [`LocalLlm`]). Chain
     /// `with_openai_provider` on the returned router to add more.
     pub fn try_from_env() -> Result<ModelRouter<MeteredHttpClient>, AgentError> {
         let env = ApiKeys::new()?;
@@ -422,18 +434,22 @@ impl ModelRouter {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| rig_core::http_client::Error::Instance(Box::new(error)))?;
+        // The providers' own hosts unless `OVERRIDE_ANTHROPIC_API_URL` or
+        // `OVERRIDE_OPENAI_API_URL` names a compatible gateway.
         let anthropic = anthropic::Client::builder()
             .api_key(env.anthropic_api_key.to_string())
+            .base_url(AnthropicApiUrl::new()?.as_str())
             .http_client(AnthropicPromptLayout::new(MeteredHttpClient::new(
                 http.clone(),
                 ANTHROPIC_PROVIDER,
                 WireProtocol::Anthropic,
             )))
             .build()?;
-        // Default base URL is api.openai.com; OpenAI's GPT models use
-        // Responses API so reasoning models get max_output_tokens.
+        // OpenAI's GPT models use the Responses API so reasoning models get
+        // max_output_tokens.
         let openai = openai::Client::builder()
             .api_key(env.openai_api_key.to_string())
+            .base_url(OpenaiApiUrl::new()?.as_str())
             .http_client(MeteredHttpClient::new(
                 http.clone(),
                 OPENAI_PROVIDER,
@@ -455,14 +471,18 @@ impl ModelRouter {
                 WireProtocol::Gemini,
             ))
             .build()?;
-        ModelRouter::new(anthropic, openai)
+        let router = ModelRouter::new(anthropic, openai)
             .with_gemini_client(gemini)
             .with_openai_provider(CEREBRAS_PROVIDER, CEREBRAS_BASE_URL, &env.cerebras_api_key)?
             .with_openai_provider(
                 FIREWORKS_PROVIDER,
                 FIREWORKS_BASE_URL,
                 &env.firework_api_key,
-            )
+            )?;
+        match LocalLlm::from_env()? {
+            Some(local) => router.with_local_llm(&local),
+            None => Ok(router),
+        }
     }
 
     /// The process-wide full router, built from the environment on first use.
@@ -482,6 +502,14 @@ impl ModelRouter {
 }
 
 impl<H: HttpClientExt + Clone + 'static> ModelRouter<H> {
+    /// Serve every routed id with `local/<model>` instead of its own provider;
+    /// the `local` client must be registered (see
+    /// [`with_local_llm`](ModelRouter::with_local_llm)).
+    pub(crate) fn serving_every_request_with(mut self, model: &str) -> Self {
+        self.local_model = Some(Arc::from(model));
+        self
+    }
+
     /// Bind the native Gemini GenerateContent client. Google ids route here.
     pub fn with_gemini_client(mut self, client: gemini::Client<H>) -> Self {
         self.gemini = Some(Arc::new(client));
@@ -521,6 +549,7 @@ impl ModelRouter<MeteredHttpClient> {
                 router.anthropic = Arc::new(
                     anthropic::Client::builder()
                         .api_key(api_key)
+                        .base_url(AnthropicApiUrl::new()?.as_str())
                         .http_client(AnthropicPromptLayout::new(
                             MeteredHttpClient::new(
                                 http,
@@ -536,6 +565,7 @@ impl ModelRouter<MeteredHttpClient> {
                 router.openai = Arc::new(
                     openai::Client::builder()
                         .api_key(api_key)
+                        .base_url(OpenaiApiUrl::new()?.as_str())
                         .http_client(
                             MeteredHttpClient::new(http, OPENAI_PROVIDER, WireProtocol::Responses)
                                 .with_agent_api_key(),
@@ -579,6 +609,34 @@ impl ModelRouter<MeteredHttpClient> {
             .build()?;
         Ok(self.with_openai_client(provider, client))
     }
+
+    /// Register the operator's own OpenAI-compatible server as the `local`
+    /// provider, and, when `local` names a model, serve every request with it.
+    ///
+    /// The server's client is unmetered: its usage is free, so it is never
+    /// admitted, priced or journaled, whatever the billing mode. It is not
+    /// guarded against private addresses either: a local model server is on
+    /// the operator's own host or network by design.
+    pub fn with_local_llm(self, local: &LocalLlm) -> Result<Self, AgentError> {
+        let http = ReqwestClient::builder()
+            .retry(reqwest::retry::never())
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| rig_core::http_client::Error::Instance(Box::new(error)))?;
+        let client = openai::CompletionsClient::builder()
+            .api_key(local.api_key())
+            .base_url(local.base_url())
+            .http_client(
+                MeteredHttpClient::new(http, LOCAL_PROVIDER, WireProtocol::ChatCompletions)
+                    .unmetered(),
+            )
+            .build()?;
+        let router = self.with_openai_client(LOCAL_PROVIDER, client);
+        Ok(match local.model() {
+            Some(model) => router.serving_every_request_with(model),
+            None => router,
+        })
+    }
 }
 
 impl<H: HttpClientExt + Clone + Default + std::fmt::Debug + 'static> ModelRouter<H> {
@@ -586,8 +644,20 @@ impl<H: HttpClientExt + Clone + Default + std::fmt::Debug + 'static> ModelRouter
     ///
     /// Returns [`AgentError::UnknownModel`] if no provider claims it (and
     /// [`AgentError::MalformedModel`] if the id has no `provider/` segment).
+    ///
+    /// With a local server configured for every request
+    /// ([`with_local_llm`](ModelRouter::with_local_llm)), a well-formed id of
+    /// any provider routes to `local/<model>` instead. This is the one place a
+    /// model id is resolved, so the rewrite holds for every caller.
     pub(crate) fn route<'a>(&self, model: &'a str) -> Result<RoutedModel<'a, H>, AgentError> {
         let parsed = Model::try_from(model)?;
+        let parsed = match &self.local_model {
+            Some(local) => Model {
+                provider: std::borrow::Cow::Borrowed(LOCAL_PROVIDER),
+                name: std::borrow::Cow::Owned(local.to_string()),
+            },
+            None => parsed,
+        };
 
         if parsed.provider() == ANTHROPIC_PROVIDER {
             return Ok(RoutedModel::Anthropic(AnthropicModel::new(
@@ -630,6 +700,17 @@ impl<H: HttpClientExt + Clone + Default + std::fmt::Debug + 'static> ModelRouter
     /// bare api id — `PredefinedModel`'s `Display` is the provider-qualified
     /// routing id, which the Anthropic API rejects as a model name.
     fn default_model(&self) -> RoutedModel<'static, H> {
+        if let Some(local) = &self.local_model
+            && let Some(client) = self.openai_compatible.get(LOCAL_PROVIDER)
+        {
+            return RoutedModel::OpenAiChatCompletions(OpenAiChatCompletionsModel::new(
+                Model {
+                    provider: std::borrow::Cow::Borrowed(LOCAL_PROVIDER),
+                    name: std::borrow::Cow::Owned(local.to_string()),
+                },
+                Arc::clone(client),
+            ));
+        }
         RoutedModel::Anthropic(AnthropicModel::new(
             PredefinedModel::Smart.into(),
             self.anthropic.clone(),

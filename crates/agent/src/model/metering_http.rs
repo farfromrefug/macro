@@ -43,6 +43,9 @@ pub struct MeteredHttpClient<H = http_client::ReqwestClient> {
     /// Whether the key is Macro's own, so a suspended or out-of-credit
     /// response is a Macro outage worth alerting on.
     macro_account: bool,
+    /// Whether requests skip metering: a model server the operator runs
+    /// themselves, which costs nothing and has no rate to admit against.
+    unmetered: bool,
 }
 
 /// Puts the tier and effort the provider actually receives on the model-call
@@ -89,7 +92,18 @@ impl<H> MeteredHttpClient<H> {
             provider: provider.into(),
             protocol,
             macro_account: true,
+            unmetered: false,
         }
+    }
+
+    /// This client sending to a model server the operator runs themselves
+    /// (see [`super::local`]), whose usage is free: requests skip admission,
+    /// pricing and journaling even when billing is activated, and a failed
+    /// response is the operator's own server, never a Macro account outage.
+    pub fn unmetered(mut self) -> Self {
+        self.unmetered = true;
+        self.macro_account = false;
+        self
     }
 
     /// This client authenticating with an agent's own key: its account
@@ -147,6 +161,9 @@ impl<H> MeteredHttpClient<H> {
                         .map_err(|_| http_error(MeteringError::Unsupported))?,
                 );
             }
+        }
+        if self.unmetered {
+            return Ok((request, None));
         }
         let Some(context) = MeteringContext::current().filter(MeteringContext::enabled) else {
             return Ok((request, None));
