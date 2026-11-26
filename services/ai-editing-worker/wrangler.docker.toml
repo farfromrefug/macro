@@ -1,0 +1,37 @@
+# Config for the self-host image (docker/Dockerfile.selfhost-ai-editing): the
+# worker is bundled when the image is built, so there is no build step here.
+# Keep `vars` in step with [env.local.vars] in wrangler.toml, minus the trace
+# export, which has no collector in that stack.
+name = "ai-editing-worker"
+main = "index.js"
+no_bundle = true
+compatibility_date = "2025-07-22"
+compatibility_flags = ["nodejs_compat", "enable_request_signal", "global_fetch_strictly_public"]
+
+[[rules]]
+type = "Text"
+globs = ["**/*.md"]
+fallthrough = true
+
+[[rules]]
+type = "CompiledWasm"
+globs = ["**/*.wasm"]
+fallthrough = true
+
+[vars]
+CANVAS_RENDER_URL = "https://localhost:8090/canvas-render.html"
+CANVAS_BROWSER_URL = ""
+ENVIRONMENT = "local"
+SYNC_WS_BASE = "ws://sync-service:8787"
+DSS_BASE = "http://document-storage-service:8080"
+SEARCH_SERVICE_BASE = "http://search-processing-service:8080"
+CONTACTS_SERVICE_BASE = "http://contacts-service:8080"
+AUTH_SERVICE_BASE = "http://connection-gateway:8080"
+
+[[d1_databases]]
+binding = "TRACES_DB"
+database_name = "ai-editing-traces"
+database_id = "16d34e99-3bc6-44e4-a287-1ea65183bd28"
+
+[dev]
+port = 8933
