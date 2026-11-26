@@ -1,0 +1,9 @@
+# syntax=docker/dockerfile:1
+#
+# The small WebSocket endpoint the web app connects to at /websocket
+# (services/websocket-service), on Alpine and without the service's install step.
+FROM oven/bun:1-alpine
+WORKDIR /app
+COPY services/websocket-service/src/index.ts ./
+EXPOSE 6969
+CMD ["bun", "run", "index.ts"]

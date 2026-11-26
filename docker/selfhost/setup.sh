@@ -6,17 +6,20 @@
 #   ./setup.sh            # create or complete .env
 #   ./setup.sh --host macro.example.com --email you@example.com
 #                         # also point the stack at a public hostname
+#   ./setup.sh --calls    # also enable video calls (a LiveKit server)
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 host=""
 email=""
+calls=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --host) host="${2:?--host needs a hostname}"; shift 2 ;;
     --email) email="${2:?--email needs an address}"; shift 2 ;;
-    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --calls) calls=1; shift ;;
+    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -110,6 +113,13 @@ if [ -n "$host" ]; then
   set_var PUBLIC_ORIGIN "https://$host"
   set_var PROXY_PORT 443
   set_var TLS_MODE "${email:-internal}"
+fi
+
+if [ "$calls" = 1 ]; then
+  [ -n "$(get LIVEKIT_API_KEY)" ] || set_var LIVEKIT_API_KEY macro
+  fill LIVEKIT_API_SECRET hex32
+  [ -n "$(get LIVEKIT_SERVER_URL)" ] || set_var LIVEKIT_SERVER_URL "ws://livekit.localhost:7880"
+  set_var COMPOSE_PROFILES calls
 fi
 
 chmod 600 .env

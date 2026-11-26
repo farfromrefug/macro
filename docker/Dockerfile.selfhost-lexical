@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1
+#
+# The lexical service for the self-host stack. docker/lexical-service.Dockerfile
+# builds it too, but keeps the whole monorepo's installed dependencies in the
+# image (about 6 GB). This one bundles the server in a builder and ships only the
+# bundle and the one dependency it cannot bundle.
+#
+# Build from the repository root:
+#   docker build -f docker/Dockerfile.selfhost-lexical -t macro-lexical-service .
+FROM oven/bun:1 AS builder
+WORKDIR /app
+COPY . .
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install --frozen-lockfile
+
+WORKDIR /app/services/lexical-service
+RUN mkdir -p node_modules/@macro-inc \
+  && ln -sfn /app/packages/lexical-core node_modules/@macro-inc/lexical-core
+
+# A bundle, not the TS entry: executing the unbundled TS under Bun evaluates the
+# circular @lexical/* ESM imports in an order that hits a TDZ error. loro-crdt
+# stays external because bundling it emits its .wasm as a second output file.
+RUN bun build src/server.ts --target=bun --external loro-crdt --outfile=/app/server.bundle.js
+
+FROM oven/bun:1-slim
+WORKDIR /app
+COPY --from=builder /app/server.bundle.js ./
+COPY --from=builder /app/node_modules/loro-crdt ./node_modules/loro-crdt
+ENV PORT=8096
+EXPOSE 8096
+CMD ["bun", "/app/server.bundle.js"]

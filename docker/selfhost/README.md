@@ -42,10 +42,29 @@ Passwords vault) and the Gmail, Outlook and model emulators. See
 ## Requirements
 
 - Docker Engine 24 or later with the Compose plugin (v2.24+).
-- About 8 GB of RAM for the containers, and 20 GB of disk.
 - On Linux, `vm.max_map_count` of at least 262144 for OpenSearch:
   `sudo sysctl -w vm.max_map_count=262144`.
-- `openssl` on the machine where you run `setup.sh`.
+- `openssl` and `ssh-keygen` on the machine where you run `setup.sh`.
+
+### Resources
+
+Measured on a fresh install on an arm64 machine, with the release images:
+
+| | |
+| --- | --- |
+| Containers | 26 (about 21 long-running; the rest are one-shot setup) |
+| RAM in use | about **3 GB** a few minutes after start, with one user. OpenSearch, LocalStack, FusionAuth, Kafka and Postgres are about 350–650 MB each; the Rust services are 5–280 MB each. Plan for 4 GB free, 8 GB to leave room for a real mailbox |
+| Disk, images | about **10 GB** unpacked (about 4 GB to download). The Rust services image is 2.2 GB, OpenSearch 2.2 GB and LocalStack 1.7 GB |
+| Disk, data | about 200 MB empty (Postgres, FusionAuth, Kafka) |
+
+Where the weight comes from: the 14 Rust service binaries are 1.3 GB of the
+services image, and the platform needs a search engine (OpenSearch: the document
+and search services exit without it), a message bus (Kafka), an AWS stand-in
+(LocalStack) and an identity provider (FusionAuth), which are JVM or Python
+processes. The defaults are already trimmed: small JVM heaps for OpenSearch,
+Kafka and FusionAuth, one Kafka partition per topic, Alpine Redis and Postgres
+for what does not need more. Raise `OPENSEARCH_JAVA_OPTS` and `KAFKA_HEAP_OPTS`
+in `.env` for a large mailbox.
 
 ## Configuration
 
@@ -77,6 +96,28 @@ browser, or accept the warning:
 ```bash
 docker compose cp proxy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
 ```
+
+### Video calls
+
+Calls use a LiveKit server, which is optional because it needs UDP ports:
+
+```bash
+./setup.sh --calls
+docker compose up -d
+```
+
+That generates a key pair, turns on the `calls` profile (`COMPOSE_PROFILES=calls`)
+and points the backend at `ws://livekit.localhost:7880`. The backend uses that one
+URL both to call LiveKit from inside the network and to hand to the browser, so the
+host name has to resolve in both places: the `livekit` service answers to it on the
+compose network, and browsers resolve `*.localhost` to this machine. Ports 7880/tcp,
+7881/tcp and 7882/udp are published on `127.0.0.1`, so only this machine can join.
+
+To let other machines join, set `LIVEKIT_BIND=0.0.0.0`, `LIVEKIT_NODE_IP` to the
+public IP of this host, and `LIVEKIT_HOST` and `LIVEKIT_SERVER_URL` to a name they
+can resolve, with a TLS terminator in front of port 7880 for `wss://`. That
+configuration is untested here. Call recording (LiveKit Egress) and transcription
+(a separate agent that uses LiveKit Cloud's speech-to-text) are not included.
 
 ### Real email
 
@@ -156,10 +197,10 @@ files in them.
   no mailbox (the app logs `NoGmailGrant`; email sign-in itself works). Microsoft
   needs more than a client id and is not wired. The local stack's emulators are
   not included.
-- **Billing, GitHub sync, push notifications and calls (LiveKit)** are inert: the
-  services read placeholder credentials at startup, and the integration does
-  nothing until you supply real ones. The document service logs a LiveKit
-  connection error every few seconds for that reason.
+- **Billing, GitHub sync and push notifications** are inert: the services read
+  placeholder credentials at startup, and the integration does nothing until you
+  supply real ones. **Calls** work only with `./setup.sh --calls`; without it the
+  document service logs a LiveKit connection error every few seconds.
 - Everything AWS-shaped runs on LocalStack. Macro's services have no other
   storage or queue backend, so this is a single-host deployment. It is not
   highly available.

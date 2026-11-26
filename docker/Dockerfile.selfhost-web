@@ -45,7 +45,9 @@ ENV MODE=development \
     VITE_LOCAL_ONLY=true \
     VITE_LOCAL_STACK=true \
     VITE_AI_EDITING_WORKER_URL=/ai-editing
-RUN bun run --bun build
+RUN bun run --bun build \
+    # Source maps are about half the bundle and nothing in the stack serves them.
+    && find dist -name '*.map' -delete
 
 FROM caddy:2-alpine
 COPY docker/selfhost/Caddyfile /etc/caddy/Caddyfile

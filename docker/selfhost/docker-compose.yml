@@ -230,9 +230,11 @@ x-macro-env: &macro-env
   PIPEDREAM_PROJECT_ID: proj_local
   SLACK_MCP_CLIENT_ID: local-slack-mcp-client
   SLACK_MCP_CLIENT_SECRET: local-slack-mcp-secret
-  LIVEKIT_SERVER_URL: http://localhost:7880
-  LIVEKIT_API_KEY: local-livekit-key
-  LIVEKIT_API_SECRET: local-livekit-secret
+  # Video calls. These point at the `livekit` service when the `calls` profile
+  # is on (see .env.example); otherwise they are placeholders.
+  LIVEKIT_SERVER_URL: ${LIVEKIT_SERVER_URL:-http://localhost:7880}
+  LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-local-livekit-key}
+  LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-local-livekit-secret}
   CAL_EVENT_TYPE_CONTENT_NAMES_KEY: '{"1":{"content_name":"local","value":0}}'
   META_PIXEL_ID: local-meta-pixel
   META_ACCESS_TOKEN: local-meta-access-token
@@ -297,8 +299,7 @@ services:
       start_period: 20s
 
   redis:
-    # Redis Stack: the services use RedisJSON/RediSearch, not just the core.
-    image: redis/redis-stack-server:latest
+    image: redis:7-alpine
     restart: unless-stopped
     volumes:
       - redis_data:/data
@@ -313,6 +314,8 @@ services:
     image: apache/kafka:3.9.1
     restart: unless-stopped
     environment:
+      # The image defaults to a 1 GB heap, far more than one idle node uses.
+      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:--Xms128m -Xmx384m}
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
@@ -322,6 +325,10 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # One node needs one offsets partition (the default is 50), and small
+      # indexes: Kafka pre-allocates 10 MB of index file per partition.
+      KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 1
+      KAFKA_LOG_INDEX_SIZE_MAX_BYTES: 262144
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
@@ -353,7 +360,7 @@ services:
         while read -r topic; do
           [ -n "$$topic" ] || continue
           /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
-            --create --if-not-exists --topic "$$topic" --partitions 6 --replication-factor 1
+            --create --if-not-exists --topic "$$topic" --partitions "${KAFKA_PARTITIONS:-1}" --replication-factor 1
         done < /topics.txt
 
   search:
@@ -367,7 +374,7 @@ services:
       discovery.type: single-node
       node.name: search
       bootstrap.memory_lock: "true"
-      OPENSEARCH_JAVA_OPTS: ${OPENSEARCH_JAVA_OPTS:--Xms512m -Xmx512m}
+      OPENSEARCH_JAVA_OPTS: ${OPENSEARCH_JAVA_OPTS:--Xms256m -Xmx256m -XX:-UseG1GC -XX:+UseSerialGC -XX:ReservedCodeCacheSize=48m -XX:MaxDirectMemorySize=64m -Xss512k}
       # Without the security plugin there is no security to disable.
     ulimits:
       memlock: { soft: -1, hard: -1 }
@@ -420,7 +427,7 @@ services:
   # --- Identity -----------------------------------------------------------------
 
   fusionauth-db:
-    image: postgres:16.0-bookworm
+    image: postgres:16-alpine
     restart: unless-stopped
     environment:
       PGDATA: /var/lib/postgresql/data/pgdata
@@ -480,7 +487,7 @@ services:
       DATABASE_USERNAME: fusionauth
       DATABASE_PASSWORD: ${FUSIONAUTH_DB_PASSWORD}
       FUSIONAUTH_APP_KICKSTART_FILE: /usr/local/fusionauth/kickstart/kickstart.json
-      FUSIONAUTH_APP_MEMORY: 512M
+      FUSIONAUTH_APP_MEMORY: ${FUSIONAUTH_MEMORY:-320M}
       FUSIONAUTH_APP_RUNTIME_MODE: production
       FUSIONAUTH_APP_URL: http://fusionauth:9011
     ports:
@@ -723,7 +730,7 @@ services:
     image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-lexical-service:${MACRO_VERSION:-latest}
     build:
       context: ../..
-      dockerfile: docker/lexical-service.Dockerfile
+      dockerfile: docker/Dockerfile.selfhost-lexical
     restart: unless-stopped
     environment:
       PORT: "8096"
@@ -745,8 +752,40 @@ services:
     image: ${MACRO_REGISTRY:-ghcr.io/macro-inc}/macro-websocket-service:${MACRO_VERSION:-latest}
     build:
       context: ../..
-      dockerfile: docker/websocket-service.Dockerfile
+      dockerfile: docker/Dockerfile.selfhost-websocket
     restart: unless-stopped
+
+  livekit:
+    # Video calls: a LiveKit SFU. Optional (profile `calls`); enable it with
+    # ./setup.sh --calls. The backend uses one URL, LIVEKIT_SERVER_URL, both to
+    # call LiveKit's API from inside the network and to hand the browser, so the
+    # hostname in it has to resolve in both places. The service answers to that
+    # name on the compose network, and the browser resolves `*.localhost` itself.
+    image: livekit/livekit-server:v1.9.0
+    profiles: [calls]
+    restart: unless-stopped
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          use_external_ip: false
+          node_ip: ${LIVEKIT_NODE_IP:-127.0.0.1}
+        keys:
+          ${LIVEKIT_API_KEY:-local-livekit-key}: ${LIVEKIT_API_SECRET:-local-livekit-secret}
+        webhook:
+          api_key: ${LIVEKIT_API_KEY:-local-livekit-key}
+          urls:
+            - http://document-storage-service:8080/call/webhook
+    ports:
+      - "${LIVEKIT_BIND:-127.0.0.1}:7880:7880"
+      - "${LIVEKIT_BIND:-127.0.0.1}:7881:7881"
+      - "${LIVEKIT_BIND:-127.0.0.1}:7882:7882/udp"
+    networks:
+      default:
+        aliases:
+          - ${LIVEKIT_HOST:-livekit.localhost}
 
   # --- Edge ------------------------------------------------------------------------------
 

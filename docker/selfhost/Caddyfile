@@ -14,6 +14,7 @@
 
 {$SITE_ADDRESS:localhost:8090} {
 	tls {$TLS_MODE:internal}
+	encode zstd gzip
 
 	# --- Backend services (HTTP; each listens on :8080) ----------------------
 	handle_path /auth/* {
