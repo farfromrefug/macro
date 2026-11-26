@@ -6,6 +6,7 @@ use crate::outbound::native::ports::{
     McpServerHttp, McpServerStore, OAuthClient, OAuthStateStore, PendingAuth,
 };
 #[cfg(feature = "providers")]
+use crate::outbound::guarded_http::is_public;
 use crate::outbound::native::provider_registry::PreRegisteredProviders;
 use macro_user_id::cowlike::CowLike;
 use mcp_toolset::MCP_CLIENT_NAME;
@@ -76,10 +77,27 @@ fn supports_client_id_metadata(metadata: &AuthorizationMetadata) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `client_id` is an HTTPS URL a provider can fetch from the public
+/// internet. A provider fetches the document itself, so a `localhost` or
+/// private-network address (a self-hosted install) cannot serve as one.
 fn is_valid_client_metadata_url(client_id: &str) -> bool {
-    reqwest::Url::parse(client_id)
-        .ok()
-        .is_some_and(|url| url.scheme() == "https" && url.host_str().is_some() && url.path() != "/")
+    let Ok(url) = reqwest::Url::parse(client_id) else {
+        return false;
+    };
+    let public_host = match url.host() {
+        Some(url::Host::Domain(domain)) => {
+            let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+            domain.contains('.')
+                && !["localhost", "local", "internal", "lan"]
+                    .iter()
+                    .any(|private| domain == *private || domain.ends_with(&format!(".{private}")))
+        }
+        Some(url::Host::Ipv4(address)) => is_public(address.into()),
+        Some(url::Host::Ipv6(address)) => is_public(address.into()),
+        None => false,
+    };
+
+    url.scheme() == "https" && public_host && url.path() != "/"
 }
 
 impl<S, R> OAuthService<S, R> {

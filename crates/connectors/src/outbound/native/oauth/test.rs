@@ -237,3 +237,28 @@ async fn dcr_remains_the_fallback_when_cimd_is_not_supported() {
     assert_eq!(registrations.load(Ordering::SeqCst), 1);
     server_task.abort();
 }
+
+#[test]
+fn only_a_publicly_fetchable_https_url_is_a_client_metadata_document() {
+    for valid in [
+        "https://app.macro.com/cognition/mcp/servers/auth/client-metadata",
+        "https://8.8.8.8/client-metadata",
+    ] {
+        assert!(is_valid_client_metadata_url(valid), "{valid}");
+    }
+
+    for invalid in [
+        "https://localhost:8090/cognition/mcp/servers/auth/client-metadata",
+        "https://macro.localhost/client-metadata",
+        "https://macro.local/client-metadata",
+        "https://macro/client-metadata",
+        "https://127.0.0.1/client-metadata",
+        "https://192.168.1.10/client-metadata",
+        "https://[::1]/client-metadata",
+        "http://app.macro.com/client-metadata",
+        "https://app.macro.com/",
+        "not a url",
+    ] {
+        assert!(!is_valid_client_metadata_url(invalid), "{invalid}");
+    }
+}
