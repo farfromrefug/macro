@@ -56,6 +56,7 @@ mod testing_harness {
             std::env::VarError::NotPresent => Ok(None),
             err => Err(ServiceUrlVarErr { var_name, err }),
         })
+        .map(super::non_blank)
     }
 
     pub(crate) fn with_mock_override_env<F, Cb, U>(f: F, cb: Cb) -> U
@@ -81,10 +82,19 @@ pub use testing_harness::read_override_env;
     reason = "Used when running locally to override service urls"
 )]
 pub fn read_override_env(var_name: &'static str) -> Result<Option<String>, ServiceUrlVarErr> {
-    std::env::var(var_name).map(Some).or_else(|err| match err {
-        std::env::VarError::NotPresent => Ok(None),
-        err => Err(ServiceUrlVarErr { var_name, err }),
-    })
+    std::env::var(var_name)
+        .map(Some)
+        .or_else(|err| match err {
+            std::env::VarError::NotPresent => Ok(None),
+            err => Err(ServiceUrlVarErr { var_name, err }),
+        })
+        .map(non_blank)
+}
+
+/// A set but blank override is unset, so a deployment template can declare
+/// `OVERRIDE_X: ${X:-}` without turning an unset `X` into an empty URL.
+fn non_blank(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty())
 }
 
 /// A service URL string that can either borrow an existing string slice or own
@@ -833,6 +843,28 @@ service_url! {
         local: "https://generativelanguage.googleapis.com",
         dev: "https://generativelanguage.googleapis.com",
         prod: "https://generativelanguage.googleapis.com",
+    }
+}
+
+service_url! {
+    /// Anthropic API host, where the agent's model router sends Messages
+    /// requests. Anthropic's host in every environment; override it to point
+    /// "Claude" at an Anthropic-compatible gateway.
+    pub struct AnthropicApiUrl {
+        local: "https://api.anthropic.com",
+        dev: "https://api.anthropic.com",
+        prod: "https://api.anthropic.com",
+    }
+}
+
+service_url! {
+    /// OpenAI API base (with its `/v1` path), where the agent's model router
+    /// sends Responses requests. OpenAI's host in every environment;
+    /// override it to point at an OpenAI-compatible gateway.
+    pub struct OpenaiApiUrl {
+        local: "https://api.openai.com/v1",
+        dev: "https://api.openai.com/v1",
+        prod: "https://api.openai.com/v1",
     }
 }
 

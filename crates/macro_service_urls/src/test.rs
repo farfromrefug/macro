@@ -885,3 +885,52 @@ fn google_oauth_token_info_url_honors_the_standard_override() {
         },
     );
 }
+
+#[test]
+fn model_provider_hosts_default_to_the_providers_and_honor_the_standard_override() {
+    for environment in ENVS {
+        with_mock_override_env(missing_override, || {
+            assert_eq!(
+                AnthropicApiUrl::new_for_environment(environment)
+                    .unwrap()
+                    .as_str(),
+                "https://api.anthropic.com",
+            );
+            assert_eq!(
+                OpenaiApiUrl::new_for_environment(environment)
+                    .unwrap()
+                    .as_str(),
+                "https://api.openai.com/v1",
+            );
+        });
+    }
+    assert_eq!(
+        AnthropicApiUrl::local().override_env_var_name(),
+        "OVERRIDE_ANTHROPIC_API_URL",
+    );
+    assert_eq!(
+        OpenaiApiUrl::local().override_env_var_name(),
+        "OVERRIDE_OPENAI_API_URL",
+    );
+
+    let url = with_mock_override_env(
+        |name| {
+            (name == "OVERRIDE_ANTHROPIC_API_URL")
+                .then(|| "http://gateway.internal:4000".to_owned())
+                .ok_or(std::env::VarError::NotPresent)
+        },
+        || AnthropicApiUrl::new_for_environment(macro_env::Environment::Production).unwrap(),
+    );
+    assert_eq!(url.as_str(), "http://gateway.internal:4000");
+}
+
+#[test]
+fn a_blank_override_is_unset() {
+    for blank in ["", "   "] {
+        let url = with_mock_override_env(
+            move |_| Ok(blank.to_owned()),
+            || OpenaiApiUrl::new_for_environment(macro_env::Environment::Production).unwrap(),
+        );
+        assert_eq!(url.as_str(), "https://api.openai.com/v1");
+    }
+}

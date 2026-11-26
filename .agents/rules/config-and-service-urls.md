@@ -42,7 +42,9 @@ startup loudly.
   `GoogleOauthCertsUrl`, `GoogleOauthAuthorizationUrl`, `GoogleOauthTokenUrl`,
   `GoogleOauthRevokeUrl`, `GoogleOauthTokenInfoUrl` for `crates/gmail_emulator`;
   `MicrosoftGraphUrl` for `crates/outlook_emulator`;
-  `GoogleGenerativeAiApiUrl` for `crates/model_emulator`; `CapsolverApiUrl`
+  `GoogleGenerativeAiApiUrl` for `crates/model_emulator`;
+  `AnthropicApiUrl` and `OpenaiApiUrl` for an Anthropic- or OpenAI-compatible
+  gateway; `CapsolverApiUrl`
   for `crates/capsolver_emulator`; `TypesafeApiUrl` for
   the model stand-in of `crates/email_e2e`): the provider's host in
   every environment, with the override as the only way to point elsewhere.
@@ -52,7 +54,7 @@ startup loudly.
   `MicrosoftLoginUrl` for the calls a service makes and
   `MicrosoftLoginPageUrl` for the pages.
 - The only override is `OVERRIDE_<SNAKE_NAME>`, read from the process
-  environment, not from Doppler. Local in-network overrides live in
+  environment, not from Doppler (a blank value is unset). Local in-network overrides live in
   `xtask_local`'s `local_env.rs`; `local` defaults are host ports and do not
   work inside Docker.
 - The URL table is hand-copied. A new or changed service URL updates every copy:
