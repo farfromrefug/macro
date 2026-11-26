@@ -219,9 +219,15 @@ files in them.
   read those vendors' APIs, so without Pipedream give them tokens:
   `LINEAR_API_KEY` and `NOTION_API_TOKEN` in `.env`. Each token is one for the
   whole instance: every user counts as connected, and an import reads with that
-  token's access, not the user's. The Linear key also gives agents Linear's
-  MCP tools; Notion's hosted MCP takes OAuth sign-ins only, so the Notion token
-  serves the importer, not agent tools. Jira has no token option yet.
+  token's access, not the user's. Jira has no token option yet.
+- **Linear and Notion for agents** sign in with OAuth, with no broker: the
+  setup seeds both into the overlay table (`NATIVE_OAUTH_APPS` in `.env`; set
+  it blank to skip), so Connect on the Integrations page opens the vendor's own
+  consent screen and agents get the MCP tools. The token above stays for the
+  importers, which read the vendors' REST APIs. Slack has no dynamic
+  registration: create a Slack app whose redirect URL is
+  `$PUBLIC_ORIGIN/cognition/mcp/servers/auth/callback`, then set `SLACK_MCP_CLIENT_ID` and
+  `SLACK_MCP_CLIENT_SECRET`.
 - **Gmail and Outlook** need real OAuth clients. Set `GOOGLE_CLIENT_ID` and
   `GOOGLE_CLIENT_SECRET` **before the first `up`**: they are written into
   FusionAuth's identity provider on its first boot. Until then "Continue with

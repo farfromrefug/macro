@@ -235,6 +235,33 @@ fn run_with_tokens(
 }
 
 #[test]
+fn token_app_that_is_overlaid_counts_the_users_sign_in_for_mcp_and_the_token_for_api() {
+    let overlays = overlays()
+        .with_token_apps(&HashMap::from([(app("figma"), Surfaces::new(false, true))]));
+    let figma = app_key("figma");
+    let resolve = |connections| {
+        resolve(
+            &user(),
+            MacroConnectEnabledFlag::Off,
+            &overlays,
+            &connect(),
+            connections,
+        )
+    };
+
+    let signed_in = resolve(vec![
+        held(SourceKind::Token, figma.clone()),
+        held(SourceKind::Native, figma.clone()),
+    ]);
+    assert_eq!(handle_name(&signed_in, &figma).as_deref(), Some("Native"));
+    assert_eq!(signed_in.api.len(), 1);
+
+    let not_signed_in = resolve(vec![held(SourceKind::Token, figma.clone())]);
+    assert_eq!(not_signed_in.mcp.status(&figma), Status::NotConnected);
+    assert_eq!(not_signed_in.api.len(), 1);
+}
+
+#[test]
 fn token_app_macro_connect_off_counts_the_token_and_provides_its_api_only() {
     let resolution = run_with_tokens(
         MacroConnectEnabledFlag::Off,

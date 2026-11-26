@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
 
 FROM oven/bun:1-debian
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates jq \
+    && apt-get install -y --no-install-recommends ca-certificates jq postgresql-client \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY --from=sqlx /sqlx /usr/local/bin/sqlx

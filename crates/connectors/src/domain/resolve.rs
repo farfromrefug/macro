@@ -4,8 +4,8 @@
 //! | App | Flag off | Flag on, Connect serves it | Flag on, Connect does not |
 //! |---|---|---|---|
 //! | GitHub | the account link | Connect | the account link |
-//! | An app with an instance token | the token | Connect | the token |
 //! | An overlaid app | native | Connect | native |
+//! | An app with an instance token, not overlaid | the token | Connect | the token |
 //! | Any other catalog app | Pipedream | Connect | Pipedream |
 //! | A server added by URL | its own row | its own row | its own row |
 //!
@@ -13,7 +13,7 @@
 //! is not connected (2), an app gets at most one answer (3), `slack_v2` is
 //! `slack` (4), a native row is an app only at that app's overlay URL (5),
 //! API access comes from the counted connection when its source provides an
-//! API for the app (6), and a failed flag read is off (9).
+//! API for the app, else from the instance token of an app that has one (6), and a failed flag read is off (9).
 
 use crate::domain::catalog::{ConnectSupport, Overlays};
 use crate::domain::models::{
@@ -67,6 +67,17 @@ pub(crate) fn resolve(
     connect: &ConnectSupport,
     connections: Vec<SourceConnection>,
 ) -> Resolution {
+    // An instance token's API, kept aside: it reads the vendor's REST API for
+    // the importers even where the user's own sign-in counts for MCP.
+    let token_apis: Vec<_> = connections
+        .iter()
+        .filter(|connection| connection.source == SourceKind::Token)
+        .filter_map(|connection| match (&connection.key, &connection.api) {
+            (ConnectorKey::App(app), Some(api)) => Some((app.clone(), api.clone())),
+            _ => None,
+        })
+        .collect();
+
     // Keep each key's best connection from the source that counts for it.
     // A BTreeMap so the answer's order never depends on the input's.
     let mut counted: BTreeMap<ConnectorKey, (Status, SourceConnection)> = BTreeMap::new();
@@ -132,6 +143,12 @@ pub(crate) fn resolve(
         });
     }
 
+    for (app, token_api) in token_apis {
+        if overlays.is_token_app(&app) && !api.iter().any(|handle| handle.app() == &app) {
+            api.push(ApiHandle::new(user.clone(), app, token_api));
+        }
+    }
+
     Resolution {
         mcp: McpConnections::new(user.clone(), resolved),
         api,
@@ -173,10 +190,10 @@ pub(crate) fn counted_source(
 
     if *app == ConnectorId::github() {
         SourceKind::GithubLink
-    } else if overlays.is_token_app(app) {
-        SourceKind::Token
     } else if overlays.is_overlaid(app) {
         SourceKind::Native
+    } else if overlays.is_token_app(app) {
+        SourceKind::Token
     } else {
         SourceKind::Pipedream
     }

@@ -242,8 +242,8 @@ x-macro-env: &macro-env
   LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
   OVERRIDE_ANTHROPIC_API_URL: ${ANTHROPIC_BASE_URL:-}
   OVERRIDE_OPENAI_API_URL: ${OPENAI_BASE_URL:-}
-  SLACK_MCP_CLIENT_ID: local-slack-mcp-client
-  SLACK_MCP_CLIENT_SECRET: local-slack-mcp-secret
+  SLACK_MCP_CLIENT_ID: ${SLACK_MCP_CLIENT_ID:-local-slack-mcp-client}
+  SLACK_MCP_CLIENT_SECRET: ${SLACK_MCP_CLIENT_SECRET:-local-slack-mcp-secret}
   # Video calls. These point at the `livekit` service when the `calls` profile
   # is on (see .env.example); otherwise they are placeholders.
   LIVEKIT_SERVER_URL: ${LIVEKIT_SERVER_URL:-http://localhost:7880}
@@ -529,6 +529,7 @@ services:
     command: ["macro-migrate"]
     environment:
       DATABASE_URL: *database-url
+      NATIVE_OAUTH_APPS: ${NATIVE_OAUTH_APPS-linear=https://mcp.linear.app/mcp notion=https://mcp.notion.com/mcp}
     depends_on:
       postgres:
         condition: service_healthy

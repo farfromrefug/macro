@@ -101,7 +101,8 @@ connection.
   reads with that token's access, not the user's. Linear's hosted MCP server
   takes the token as a bearer, so Linear also serves MCP (agents and the
   sandbox proxy); Notion's takes OAuth sign-ins only, so Notion is API only.
-  It has no per-user row and no holders, refuses connect, rename, disable and
+  An app that is also in `mcp_overlays` counts the user's own OAuth sign-in
+  for MCP, and the token still serves its API to the importers. It has no per-user row and no holders, refuses connect, rename, disable and
   remove, and sends the token only to the vendor's own origin (no redirects, no
   trace context).
   A token app's Pipedream connection is ignored, as an overlaid app's is.

@@ -7,3 +7,14 @@ set -eu
 
 sqlx database create
 sqlx migrate run --source /bootstrap/migrations
+
+# Vendors that run their own MCP server connect with Macro's own OAuth client
+# (dynamic client registration), so no third-party broker is involved. A row in
+# mcp_overlays makes an app connect that way. NATIVE_OAUTH_APPS is a list of
+# slug=url pairs; set it blank to leave the catalog as it is.
+for app in ${NATIVE_OAUTH_APPS-linear=https://mcp.linear.app/mcp notion=https://mcp.notion.com/mcp}; do
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v slug="${app%%=*}" -v url="${app#*=}" <<'SQL'
+INSERT INTO mcp_overlays (app_slug, server_url) VALUES (:'slug', :'url')
+ON CONFLICT (app_slug) DO UPDATE SET server_url = EXCLUDED.server_url;
+SQL
+done
